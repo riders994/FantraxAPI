@@ -1,9 +1,21 @@
+"""Live integration tests that hit the real Fantrax API.
+
+Requires FANTRAX_USERNAME, FANTRAX_PASSWORD, and LEAGUE_ID env vars (e.g. via a
+.env file) for a league matching the hardcoded expectations below. Logged-in
+tests drive a headless Chrome via Selenium to obtain session cookies unless
+LOCAL=True and a cached `fantraxloggedin.cookie` is present.
+
+For tests that don't require live credentials or a specific league's data, see
+test_mocked_api.py.
+"""
+
 import os
 import pickle
 import sys
 import time
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta
+from types import SimpleNamespace
 
 from dotenv import load_dotenv
 from requests import Session
@@ -83,7 +95,7 @@ def add_cookie_to_session(session: Session) -> None:
                 session.cookies.set(cookie["name"], cookie["value"])
 
 
-class APITests(unittest.TestCase):
+class LiveAPITests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
         cls.league = League(league_id)
@@ -93,13 +105,31 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.league.name, "Cowley's Chaos")
         self.assertEqual(self.league.year, "2024-25 NHL")
 
+        self.assertIsInstance(self.league.start_date, datetime)
+        self.assertIsInstance(self.league.end_date, datetime)
+        self.assertLess(self.league.start_date, self.league.end_date)
+
+        self.assertTrue(self.league.team_lookup)
+        for team in self.league.teams:
+            self.assertEqual(self.league.team_lookup[team.id], team)
+
+        self.assertTrue(self.league.scoring_periods_lookup)
+        self.assertEqual(len(self.league.scoring_periods_lookup), len(self.league.scoring_periods))
+        for period in self.league.scoring_periods.values():
+            self.assertEqual(self.league.scoring_periods_lookup[period.range], period)
+            self.assertLessEqual(period.start, period.end)
+
     def test_positions(self) -> None:
         self.assertIn("206", self.league.positions)
         self.assertEqual(self.league.positions["206"].name, "Center")
+        self.assertEqual(self.league.positions["206"], self.league.positions["206"])
+        self.assertNotEqual(self.league.positions["206"], next(p for k, p in self.league.positions.items() if k != "206"))
 
     def test_status(self) -> None:
         self.assertEqual(self.league.status["3"].name, "Inj Res")
         self.assertEqual(self.league.status["4"].code, "FREE_AGENT")
+        self.assertEqual(self.league.status["3"], self.league.status["3"])
+        self.assertNotEqual(self.league.status["3"], self.league.status["4"])
 
     def test_scoring_dates(self) -> None:
         self.assertEqual(len(self.league.scoring_dates), 178)
@@ -136,9 +166,23 @@ class APITests(unittest.TestCase):
         self.assertEqual(self.league.scoring_periods[13].start, date(year=2024, month=12, day=30))
         self.assertEqual(self.league.scoring_periods[21].end, date(year=2025, month=3, day=16))
 
+        # ScoringPeriod.__eq__ cross-league: same period number but a different league_id must not be equal.
+        other_league = SimpleNamespace(league_id="some-other-league-id")
+        other_period = SimpleNamespace(league=other_league, number=self.league.scoring_periods[9].number)
+        self.assertFalse(self.league.scoring_periods[9].__eq__(other_period))
+        same_league_period = SimpleNamespace(league=self.league, number=self.league.scoring_periods[9].number)
+        self.assertTrue(self.league.scoring_periods[9].__eq__(same_league_period))
+        self.assertFalse(self.league.scoring_periods[9] == 9.5)
+        self.assertFalse(self.league.scoring_periods[9] == "not-numeric")
+
     def test_teams(self) -> None:
         for team in self.league.teams:
             self.assertIn(team.name, team_names)
+            self.assertTrue(team.id)
+            self.assertTrue(team.short)
+            self.assertIsInstance(team.short, str)
+            self.assertTrue(team.logo.startswith("http"))
+            self.assertEqual(str(team), team.name)
         self.assertRaises(NotTeamInLeague, self.league.team, "NotAProperTeamID")
         self.assertEqual(self.league.team("wookie").name, "Kashyyyk Wookies 🏴‍☠️")
 
@@ -175,6 +219,35 @@ class APITests(unittest.TestCase):
             ),
         )
 
+        # Structural invariants that must hold for any ScoringPeriodResult, regardless of league/season.
+        for number, result in results.items():
+            self.assertEqual(result.period.number, number)
+            self.assertLessEqual(result.start, result.end)
+            self.assertEqual(result.next, result.end + timedelta(days=1))
+            self.assertEqual(result.days, (result.next - result.start).days)
+            self.assertEqual(result.range, f"{result.start.strftime('%Y-%m-%d')} - {result.end.strftime('%Y-%m-%d')}")
+            self.assertEqual(result.title, f"{'Playoff ' if result.playoffs else ''}Period {result.period.number}")
+            # Exactly one of complete/current/future must be true.
+            self.assertEqual(sum([result.complete, result.current, result.future]), 1)
+            self.assertIsInstance(result.complete, bool)
+            self.assertIsInstance(result.current, bool)
+            self.assertIsInstance(result.future, bool)
+            for matchup in result.matchups:
+                self.assertIs(matchup.scoring_period, result)
+                self.assertIsInstance(matchup.away_score, float)
+                self.assertIsInstance(matchup.home_score, float)
+                self.assertGreaterEqual(matchup.difference(), 0.0)
+                winner, winner_score, loser, loser_score = matchup.winner()
+                if winner is None:
+                    self.assertEqual(matchup.away_score, matchup.home_score)
+                    self.assertEqual(matchup.difference(), 0.0)
+                else:
+                    self.assertGreaterEqual(winner_score, loser_score)
+                    self.assertEqual(matchup.difference(), winner_score - loser_score)
+                    self.assertIn(winner, (matchup.away, matchup.home))
+                    self.assertIn(loser, (matchup.away, matchup.home))
+                    self.assertNotEqual(winner, loser)
+
     def test_standings(self) -> None:
         standings = self.league.standings()
 
@@ -201,6 +274,30 @@ class APITests(unittest.TestCase):
         self.assertTrue(standings.ranks[6].team.name == "MacKstreet Boys")
         self.assertTrue(standings.ranks[1].points_for == 10813.2)
         self.assertTrue(str(standings.ranks[6]) == "6: MacKstreet Boys (10-12-0)")
+
+        # Structural/range invariants on Record fields that hold for any league.
+        for rank, record in standings.ranks.items():
+            self.assertEqual(record.rank, rank)
+            self.assertIs(record.standings, standings)
+            self.assertIsInstance(record.win, int)
+            self.assertIsInstance(record.loss, int)
+            self.assertIsInstance(record.tie, int)
+            self.assertGreaterEqual(record.win, 0)
+            self.assertGreaterEqual(record.loss, 0)
+            self.assertGreaterEqual(record.tie, 0)
+            self.assertIsInstance(record.win_percentage, float)
+            self.assertGreaterEqual(record.win_percentage, 0.0)
+            self.assertLessEqual(record.win_percentage, 1.0)
+            self.assertIsInstance(record.games_back, int)
+            self.assertGreaterEqual(record.games_back, 0)
+            self.assertIsInstance(record.wavier_wire_order, int)
+            self.assertIsInstance(record.points_for, float)
+            self.assertIsInstance(record.points_against, float)
+            self.assertGreaterEqual(record.points_for, 0.0)
+            self.assertGreaterEqual(record.points_against, 0.0)
+            self.assertIsInstance(record.streak, str)
+        # The top rank should have the lowest (best, i.e. zero) games-back value.
+        self.assertEqual(standings.ranks[1].games_back, 0)
 
         standings = self.league.standings(scoring_period_number=11)
         self.assertTrue(standings.ranks[7].points == 10)
@@ -263,6 +360,38 @@ class APITests(unittest.TestCase):
             ),
         )
 
+        # Trade datetime parsing/ordering: each must be a datetime within the league's season,
+        # and proposed <= accepted <= executed must hold for any valid trade.
+        for dt in (pending_trade.proposed, pending_trade.accepted, pending_trade.executed):
+            self.assertIsInstance(dt, datetime)
+            self.assertGreaterEqual(dt, self.league.start_date)
+            self.assertLessEqual(dt, self.league.end_date)
+        self.assertLessEqual(pending_trade.proposed, pending_trade.accepted)
+        self.assertLessEqual(pending_trade.accepted, pending_trade.executed)
+        self.assertEqual(pending_trade.proposed_by.id, "er0c60arm15b60vy")
+
+        # _parse_datetime should raise DateNotInSeason for a date entirely outside the season's start/end years.
+        out_of_season_trade_data = {
+            "txSetId": "fdsafdas2",
+            "creatorTeamId": "er0c60arm15b60vy",
+            "usefulInfo": [
+                {"name": "Proposed", "value": "Jul 4, 3:00 AM EDT"},
+                {"name": "Accepted", "value": "Jul 4, 3:00 AM EDT"},
+                {"name": "To be executed", "value": "Jul 4, 3:00 AM EDT"},
+            ],
+            "moves": [],
+        }
+        self.assertRaises(DateNotInSeason, Trade, self.league, out_of_season_trade_data)
+
+        # TradePlayer/Player injury flags driven by icons[].typeId: with an empty icons list every flag is False.
+        trade_player = next(m for m in pending_trade.moves if hasattr(m, "player"))
+        self.assertFalse(trade_player.player.day_to_day)
+        self.assertFalse(trade_player.player.out)
+        self.assertFalse(trade_player.player.injured_reserve)
+        self.assertFalse(trade_player.player.suspended)
+        self.assertFalse(trade_player.player.injured)
+        self.assertEqual(trade_player.player.injured, trade_player.player.day_to_day or trade_player.player.out or trade_player.player.injured_reserve)
+
     def test_trade_block(self) -> None:
         self.assertRaises(NotLoggedIn, self.league.pending_trades)
         self.assertRaises(NotLoggedIn, self.league.trade_block)
@@ -310,6 +439,24 @@ class APITests(unittest.TestCase):
         self.assertTrue(transactions[46].players[1].type == "DROP")
         self.assertTrue(transactions[46].players[1].name == "Ryan Leonard")
 
+        # Structural invariants for Transaction/TransactionPlayer that hold for any league/data.
+        for transaction in transactions:
+            self.assertTrue(transaction.id)
+            self.assertIsInstance(transaction.team, type(self.league.teams[0]))
+            self.assertIsInstance(transaction.date, datetime)
+            self.assertEqual(str(transaction), str(transaction.players))
+            for player in transaction.players:
+                self.assertTrue(player.type)
+                self.assertEqual(str(player), f"{player.type} {player.name}")
+                self.assertIsInstance(player.day_to_day, bool)
+                self.assertIsInstance(player.out, bool)
+                self.assertIsInstance(player.injured_reserve, bool)
+                self.assertIsInstance(player.suspended, bool)
+                self.assertIsInstance(player.injured, bool)
+                self.assertEqual(player.injured, player.day_to_day or player.out or player.injured_reserve)
+                self.assertTrue(player.positions)
+                self.assertTrue(player.all_positions)
+
     def test_position_counts(self) -> None:
         team = self.league.team("wookie")
         counts = team.position_counts()
@@ -329,12 +476,21 @@ class APITests(unittest.TestCase):
 
     def test_live_scores(self) -> None:
         team = self.league.team("wookie")
-        scores = team.live_scores(date(year=2024, month=10, day=18))
+        scoring_date = date(year=2024, month=10, day=18)
+        scores = team.live_scores(scoring_date)
         self.assertEqual(str(scores), "[Anthony Beauvillier, Samuel Girard]")
         self.assertEqual(scores[0].name, "Anthony Beauvillier")
         self.assertEqual(scores[1].points, 7.0)
         self.assertRaises(DateNotInSeason, team.live_scores, date(year=2024, month=10, day=6))
         self.assertRaises(DateNotInSeason, team.live_scores, date(year=2024, month=7, day=18))
+
+        # LivePlayer-specific attributes: points_date matches the queried date and team is resolved.
+        for player in scores:
+            self.assertEqual(player.points_date, scoring_date)
+            self.assertEqual(player.team, team)
+            self.assertIsInstance(player.points, float)
+            self.assertIsInstance(player.injured, bool)
+            self.assertEqual(player.injured, player.day_to_day or player.out or player.injured_reserve)
 
     def test_team_roster(self) -> None:
         team = self.league.team("wookie")
@@ -381,3 +537,29 @@ class APITests(unittest.TestCase):
         self.assertEqual(str(roster.rows[2].game_today), "[062yw:CAR @TBL]")
         self.assertIn("Thu 4/17", roster.rows[2].future_games)
         self.assertEqual(str(roster.rows[2].future_games["Thu 4/17"]), "[063yr:NYR @TBL]")
+
+        # Structural invariants for RosterRow/Game/Position that hold for any roster.
+        for row in roster.rows:
+            self.assertIs(row.roster, roster)
+            self.assertIsInstance(row.position, type(roster.rows[1].position))
+            self.assertEqual(row.position, row.position)
+            if row.player is None:
+                self.assertEqual(str(row), f"{row.position.short_name}: Empty")
+            else:
+                self.assertEqual(str(row), f"{row.position.short_name}: {row.player}")
+
+            games = ([row.game_today] if row.game_today else []) + list(row.future_games.values())
+            for game in games:
+                self.assertTrue(game.id)
+                self.assertIs(game.player, row.player)
+                self.assertNotEqual(game.home, game.away)
+                self.assertTrue(game.opponent)
+                self.assertIsInstance(game.date, date)
+                self.assertGreaterEqual(game.date, self.league.start_date.date())
+                self.assertLessEqual(game.date, self.league.end_date.date())
+                self.assertNotEqual(game.opponent, row.player.team_short_name)
+                self.assertEqual(game, game)
+                self.assertEqual(
+                    str(game),
+                    f"[{game.id}:{f'{game.opponent} @{game.player.team_short_name}' if game.home else f'{game.player.team_short_name} @{game.opponent}'}{f' {game.time}' if game.time else ''}]",
+                )
