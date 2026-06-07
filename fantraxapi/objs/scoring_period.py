@@ -73,6 +73,12 @@ class ScoringPeriodResult(FantraxBaseObject):
         super().__init__(league, data)
         self.name: str = self._data["caption"]
 
+        self.matchup_types = {
+            'H2hRotisserie2': self._h2h_rot_2_factory
+        }
+
+        self.matchup_type = data['tableType']
+
         self.playoffs: bool = self.name.startswith("Playoffs")
         dates = self._data["subCaption"][1:-1].split(" - ")
         self.start: date = datetime.strptime(dates[0], "%a %b %d, %Y").date()
@@ -89,7 +95,7 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.complete: bool = now > self.next
         self.current: bool = self.start < now < self.next
         self.future: bool = now < self.start
-        self.matchups: list[Matchup] = [Matchup(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)]
+        self.matchups: dict[int, Matchup] = [Matchup(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)]
         self.other_brackets: dict[str, list[Matchup]] = {}
         if other_data:
             for name, obj in other_data:
@@ -97,6 +103,26 @@ class ScoringPeriodResult(FantraxBaseObject):
                     if name not in self.other_brackets:
                         self.other_brackets[name] = []
                     self.other_brackets[name].append(Matchup(self, i, matchup["cells"]))
+
+    def _matchup_factory(self, data) -> list[Matchup]:
+        if matchup_method := self.matchup_types.get(self.matchup_type):
+            return matchup_method(data)
+        else:
+            return {i: Matchup(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
+
+    def _h2h_rot_2_factory(self, data) -> dict[H2HRotisserie2]:
+        res = dict()
+        matchup_dict = dict()
+        for row in data["rows"]:
+            muid = row['matchupId']
+            if other_row := matchup_dict.get(muid):
+                res.update({muid: H2HRotisserie2(self, muid, data, row, other_row)})
+            else:
+                matchup_dict.update({muid: row})
+        return res
+
+    def add_matchups(self, data):
+        self.matchups.update(self._matchup_factory(data))
 
     @property
     def range(self) -> str:
@@ -177,3 +203,74 @@ class Matchup(FantraxBaseObject):
             return f"{self.scoring_period.title} {winner} ({winner_score}) vs {loser} ({loser_score})"
         else:
             return f"{self.scoring_period.title} {self.away} vs {self.home}"
+
+    class H2HRotisserie2(Matchup):
+    """ Represents a H2H Matchup.
+    Attributes:
+            matchup_key (str): Matchup Key.
+            away (:class:`~Team`): Away Team.
+            away_score (float): Away Team Score.
+            home (:class:`~Team`): Home Team.
+            home_score (float): Home Team Score.
+
+    """
+    scoring_grid = dict()
+    home_score = 0.5
+    away_score = 0.5
+
+    def __init__(self, scoring_period: ScoringPeriodResult, matchup_key: int, data: dict, home_data: dict, away_data: dict):
+        super().__init__(scoring_period.league, data)
+        self.matchup_key = matchup_key
+        try:
+            self.away = self._api.team(away_data['fixedCells'][0]["teamId"])
+        except FantraxException:
+            self.away = Team(api, 'bye', 'bye', 'bye', None)
+        try:
+            self.home = self._api.team(home_data['fixedCells'][0]["teamId"])
+        except FantraxException:
+            self.home = Team(api, 'bye', 'bye', 'bye', None)
+
+        self.home_categories = {'opponent': self.away.team_id}
+        self.away_categories = {'opponent': self.home.team_id}
+
+        headers =  self._header_translator(data["header"]['cells'])
+        self._scoreboard_builder(home_data['cells'], away_data['cells'], headers)
+
+    @staticmethod
+    def _header_translator(headers: list[dict]):
+        return {
+            h['shortName']: h['name'] for h in headers
+        }
+
+    def _scoreboard_builder(self, home_cells, away_cells, headers):
+        for i, category in enumerate(headers):
+            if home_cells[i].get('toolTip'):
+                h = home_cells[i].get('toolTip')
+                a = away_cells[i].get('toolTip')
+            else:
+                h = home_cells[i]['content']
+                a = away_cells[i]['content']
+            try:
+                h = float(str(h).replace(',', ''))
+            except ValueError:
+                h = 0
+            try:
+                a = float(str(a).replace(',', ''))
+            except ValueError:
+                a = 0
+
+            self.scoring_grid.update({
+                category: {
+                    self.home.team_id: h,
+                    self.away.team_id: a,
+                }
+            })
+            self.home_categories.update({
+                category: h
+            })
+            self.away_categories.update({
+                category: a
+            })
+            if category == 'Pts':
+                self.home_score = h
+                self.away_score = a
