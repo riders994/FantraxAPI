@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -74,7 +76,8 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.name: str = self._data["caption"]
 
         self.matchup_types = {
-            'H2hRotisserie2': self._h2h_rot_2_factory
+            'H2hRotisserie2': self._h2h_rot_2_factory,
+            'H2hPointsBased3': self._h2h_points_based_3_factory,
         }
 
         self.matchup_type = data['tableType']
@@ -95,7 +98,7 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.complete: bool = now > self.next
         self.current: bool = self.start < now < self.next
         self.future: bool = now < self.start
-        self.matchups: dict[int, Matchup] = [Matchup(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)]
+        self.matchups: dict[int, Matchup] = self._matchup_factory(data)
         self.other_brackets: dict[str, list[Matchup]] = {}
         if other_data:
             for name, obj in other_data:
@@ -104,13 +107,13 @@ class ScoringPeriodResult(FantraxBaseObject):
                         self.other_brackets[name] = []
                     self.other_brackets[name].append(Matchup(self, i, matchup["cells"]))
 
-    def _matchup_factory(self, data) -> list[Matchup]:
+    def _matchup_factory(self, data) -> dict[int, Matchup]:
         if matchup_method := self.matchup_types.get(self.matchup_type):
             return matchup_method(data)
         else:
             return {i: Matchup(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
 
-    def _h2h_rot_2_factory(self, data) -> dict[H2HRotisserie2]:
+    def _h2h_rot_2_factory(self, data) -> dict[int, H2HRotisserie2]:
         res = dict()
         matchup_dict = dict()
         for row in data["rows"]:
@@ -120,6 +123,9 @@ class ScoringPeriodResult(FantraxBaseObject):
             else:
                 matchup_dict.update({muid: row})
         return res
+
+    def _h2h_points_based_3_factory(self, data) -> dict[int, H2hPointsBased3]:
+        return {i: H2hPointsBased3(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
 
     def add_matchups(self, data):
         self.matchups.update(self._matchup_factory(data))
@@ -135,7 +141,7 @@ class ScoringPeriodResult(FantraxBaseObject):
     def __str__(self) -> str:
         output = f"{self.name}\n{self.days} Days ({self.start.strftime('%a %b %d, %Y')} - {self.end.strftime('%a %b %d, %Y')})"
         output += f"\n{'Complete' if self.complete else 'Current' if self.current else 'Future'}"
-        for matchup in self.matchups:
+        for matchup in self.matchups.values():
             output += f"\n{matchup}"
         for name, matchups in self.other_brackets.items():
             output += f"\n{name}"
@@ -204,7 +210,7 @@ class Matchup(FantraxBaseObject):
         else:
             return f"{self.scoring_period.title} {self.away} vs {self.home}"
 
-    class H2HRotisserie2(Matchup):
+class H2HRotisserie2(Matchup):
     """ Represents a H2H Matchup.
     Attributes:
             matchup_key (str): Matchup Key.
@@ -214,24 +220,26 @@ class Matchup(FantraxBaseObject):
             home_score (float): Home Team Score.
 
     """
-    scoring_grid = dict()
     home_score = 0.5
     away_score = 0.5
 
     def __init__(self, scoring_period: ScoringPeriodResult, matchup_key: int, data: dict, home_data: dict, away_data: dict):
-        super().__init__(scoring_period.league, data)
+        FantraxBaseObject.__init__(self, scoring_period.league, data)
+        self.scoring_period = scoring_period
         self.matchup_key = matchup_key
+        self.scoring_grid = dict()
+        bye_data = {"name": "Bye", "shortName": "BYE", "logoUrl128": ""}
         try:
-            self.away = self._api.team(away_data['fixedCells'][0]["teamId"])
-        except FantraxException:
-            self.away = Team(api, 'bye', 'bye', 'bye', None)
+            self.away = self.league.team(away_data['fixedCells'][0]["teamId"])
+        except NotTeamInLeague:
+            self.away = Team(self.league, "bye", bye_data)
         try:
-            self.home = self._api.team(home_data['fixedCells'][0]["teamId"])
-        except FantraxException:
-            self.home = Team(api, 'bye', 'bye', 'bye', None)
+            self.home = self.league.team(home_data['fixedCells'][0]["teamId"])
+        except NotTeamInLeague:
+            self.home = Team(self.league, "bye", bye_data)
 
-        self.home_categories = {'opponent': self.away.team_id}
-        self.away_categories = {'opponent': self.home.team_id}
+        self.home_categories = {'opponent': self.away.id}
+        self.away_categories = {'opponent': self.home.id}
 
         headers =  self._header_translator(data["header"]['cells'])
         self._scoreboard_builder(home_data['cells'], away_data['cells'], headers)
@@ -253,16 +261,16 @@ class Matchup(FantraxBaseObject):
             try:
                 h = float(str(h).replace(',', ''))
             except ValueError:
-                h = 0
+                h = 0.0
             try:
                 a = float(str(a).replace(',', ''))
             except ValueError:
-                a = 0
+                a = 0.0
 
             self.scoring_grid.update({
                 category: {
-                    self.home.team_id: h,
-                    self.away.team_id: a,
+                    self.home.id: h,
+                    self.away.id: a,
                 }
             })
             self.home_categories.update({
@@ -274,3 +282,17 @@ class Matchup(FantraxBaseObject):
             if category == 'Pts':
                 self.home_score = h
                 self.away_score = a
+
+
+class H2hPointsBased3(Matchup):
+    """ Represents a H2H Points Based Matchup.
+    Attributes:
+            league (League): The League instance this object belongs to.
+            scoring_period (ScoringPeriodResult): Scoring Period result this instance belongs to.
+            matchup_key (int): Team ID.
+            away (:class:`~Team`): Away Team.
+            away_score (float): Away Team Score.
+            home (:class:`~Team`): Home Team.
+            home_score (float): Home Team Score.
+
+    """

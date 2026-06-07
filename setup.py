@@ -2,8 +2,6 @@ import os
 
 from setuptools import find_packages, setup
 
-import fantraxapi
-
 with open("README.rst", "r") as f:
     long_descr = f.read()
 
@@ -17,15 +15,15 @@ if os.path.exists("VERSION"):
                 break
 
 setup(
-    name=fantraxapi.__package_name__,
+    name="fantraxapi",
     version=__version__,
-    description=fantraxapi.__description__,
+    description="A lightweight Python library for The Fantrax API.",
     long_description=long_descr,
     long_description_content_type="text/x-rst",
-    url=fantraxapi.__url__,
-    author=fantraxapi.__author__,
-    author_email=fantraxapi.__email__,
-    license=fantraxapi.__license__,
+    url="https://github.com/meisnate12/FantraxAPI",
+    author="Nathan Taggart",
+    author_email="meisnate12@gmail.com",
+    license="MIT License",
     packages=find_packages(),
     python_requires=">=3.11",
     keywords=["fantraxapi", "fantrax", "fantasy", "wrapper", "api"],

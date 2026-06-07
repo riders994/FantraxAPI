@@ -27,6 +27,9 @@ LEAGUE_ID = "abc12345"
 LEAGUE_NAME = "Mocked Mariners League"
 LEAGUE_YEAR = "2024-25 NHL"
 
+# Real NHL leagues report this as their scoring period tableType.
+MATCHUP_TABLE_TYPE = "H2hPointsBased3"
+
 # Season chosen safely in the past relative to "today" so date-derived
 # booleans (complete/current/future) are deterministic.
 SEASON_START = datetime(2024, 10, 8)
@@ -276,6 +279,7 @@ def _season_table_entry(period_number: int, matchups: list[tuple[str, str, str, 
     return {
         "caption": f"Period {period_number}",
         "subCaption": _PERIOD_SUBCAPTIONS[period_number],
+        "tableType": MATCHUP_TABLE_TYPE,
         "rows": [_matchup_cells(*m) for m in matchups],
     }
 
@@ -314,6 +318,7 @@ def build_standings_playoffs() -> dict:
             {
                 "caption": "Playoffs - Round 5",
                 "subCaption": "(Mon Nov 11, 2024 - Sun Nov 17, 2024)",
+                "tableType": MATCHUP_TABLE_TYPE,
                 "rows": [_matchup_cells(t1, "200.5", t2, "175.25")],
             },
         ],
@@ -330,6 +335,7 @@ def build_standings_consolation() -> dict:
             {
                 "caption": "Consolation - Round 5",
                 "subCaption": "(Mon Nov 11, 2024 - Sun Nov 17, 2024)",
+                "tableType": MATCHUP_TABLE_TYPE,
                 "rows": [_matchup_cells(t3, "150.0", t4, "140.0")],
             },
         ],

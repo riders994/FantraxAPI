@@ -122,7 +122,7 @@ class ScoringPeriodResultsTests(unittest.TestCase):
 
     def test_matchup_fields(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
-        matchup = results[1].matchups[0]
+        matchup = results[1].matchups[1]
         self.assertEqual(matchup.away.name, "Anchorage Avalanche")
         self.assertEqual(matchup.home.name, "Bayview Bandits")
         self.assertEqual(matchup.away_score, 100.0)
@@ -137,7 +137,7 @@ class ScoringPeriodResultsTests(unittest.TestCase):
 
     def test_matchup_tie(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
-        tied = results[2].matchups[1]
+        tied = results[2].matchups[2]
         self.assertEqual(tied.away_score, 70.0)
         self.assertEqual(tied.home_score, 70.0)
         self.assertEqual(tied.winner(), (None, None, None, None))
