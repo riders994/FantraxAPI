@@ -155,7 +155,7 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(playoff_result.days, 7)
         self.assertIn("Consolation", playoff_result.other_brackets)
         self.assertEqual(len(playoff_result.other_brackets["Consolation"]), 1)
-        consolation_matchup = playoff_result.other_brackets["Consolation"][0]
+        consolation_matchup = playoff_result.other_brackets["Consolation"][1]
         self.assertEqual(consolation_matchup.away.name, "Cedar Crushers")
         self.assertEqual(consolation_matchup.home.name, "Dockside Dragons")
         self.assertEqual(str(consolation_matchup), "Playoff Period 5 Cedar Crushers (150.0) vs Dockside Dragons (140.0)")

@@ -65,8 +65,8 @@ class ScoringPeriodResult(FantraxBaseObject):
         complete (bool): Is the Period Complete?
         current (bool): Is it the current Period?
         future (bool): Is the Period in the future?
-        matchups (list[Matchup]): List of Matchups.
-        other_brackets (dict[str, Matchup]): Dictionary of Matchups in Other Brackets.
+        matchups (dict[int, Matchup]): Dict of Matchups with matchup ids as the key.
+        other_brackets (dict[str, dict[int, Matchup]]): Dictionary of Bracket Name to its Matchups.
         title (str): Title of the Period.
 
     """
@@ -99,13 +99,10 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.current: bool = self.start < now < self.next
         self.future: bool = now < self.start
         self.matchups: dict[int, Matchup] = self._matchup_factory(data)
-        self.other_brackets: dict[str, list[Matchup]] = {}
+        self.other_brackets: dict[str, dict[int, Matchup]] = {}
         if other_data:
             for name, obj in other_data:
-                for i, matchup in enumerate(obj["rows"], len(self.matchups) + 1):
-                    if name not in self.other_brackets:
-                        self.other_brackets[name] = []
-                    self.other_brackets[name].append(Matchup(self, i, matchup["cells"]))
+                self.other_brackets.setdefault(name, {}).update(self._matchup_factory(obj))
 
     def _matchup_factory(self, data) -> dict[int, Matchup]:
         if matchup_method := self.matchup_types.get(self.matchup_type):
@@ -145,7 +142,7 @@ class ScoringPeriodResult(FantraxBaseObject):
             output += f"\n{matchup}"
         for name, matchups in self.other_brackets.items():
             output += f"\n{name}"
-            for matchup in matchups:
+            for matchup in matchups.values():
                 output += f"\n{matchup}"
         return output
 
