@@ -275,11 +275,11 @@ _PERIOD_SUBCAPTIONS = {
 }
 
 
-def _season_table_entry(period_number: int, matchups: list[tuple[str, str, str, str]]) -> dict:
+def _season_table_entry(period_number: int, matchups: list[tuple[str, str, str, str]], table_type: str = MATCHUP_TABLE_TYPE) -> dict:
     return {
         "caption": f"Period {period_number}",
         "subCaption": _PERIOD_SUBCAPTIONS[period_number],
-        "tableType": MATCHUP_TABLE_TYPE,
+        "tableType": table_type,
         "rows": [_matchup_cells(*m) for m in matchups],
     }
 
@@ -338,6 +338,124 @@ def build_standings_consolation() -> dict:
                 "tableType": MATCHUP_TABLE_TYPE,
                 "rows": [_matchup_cells(t3, "150.0", t4, "140.0")],
             },
+        ],
+    }
+
+
+# ---------------------------------------------------------------------------
+# getStandings view=SCHEDULE/PLAYOFFS/.consolation, H2hRotisserie2-shaped
+# variant (rows are per-team category lines paired by matchupId, not
+# pre-scored away/home pairs). Routed in only when MockSession(rotisserie=True)
+# so the existing H2hPointsBased3 fixtures/tests above are untouched.
+# ---------------------------------------------------------------------------
+
+# Real rotisserie leagues report this as their scoring period tableType.
+MATCHUP_TABLE_TYPE_ROTISSERIE = "H2hRotisserie2"
+
+# A tableType FantraxAPI doesn't special-case in ScoringPeriodResult.matchup_types,
+# used to exercise _matchup_factory's generic-Matchup fallback branch.
+MATCHUP_TABLE_TYPE_UNKNOWN = "H2hSomeFutureType"
+
+# shortName/name pairs mirror the "header.cells" shape H2HRotisserie2 reads
+# (only the shortName ends up mattering -- see _header_translator/_scoreboard_builder).
+ROTISSERIE_HEADER_CELLS = [
+    {"shortName": "G", "name": "Goals"},
+    {"shortName": "A", "name": "Assists"},
+    {"shortName": "PIM", "name": "Penalty Minutes"},
+    {"shortName": "Pts", "name": "Points"},
+]
+
+# Fantrax sends a teamId like this for an empty bracket slot -- not a real
+# league member, so League.team() raises NotTeamInLeague and H2HRotisserie2
+# falls back to a placeholder "Bye" Team.
+BYE_TEAM_ID = "bye-placeholder-0000"
+
+
+def _roto_cell(content: str, tool_tip: str | None = None) -> dict:
+    cell = {"content": content}
+    if tool_tip is not None:
+        cell["toolTip"] = tool_tip
+    return cell
+
+
+def _roto_row(matchup_id: str, team_id: str, cells: list[dict], team_name: str | None = None) -> dict:
+    name = team_name if team_name is not None else TEAM_IDS_TO_NAMES.get(team_id, team_id)
+    return {"matchupId": matchup_id, "fixedCells": [{"teamId": team_id, "content": name}], "cells": cells}
+
+
+def _roto_table_entry(caption: str, sub_caption: str, rows: list[dict]) -> dict:
+    return {
+        "caption": caption,
+        "subCaption": sub_caption,
+        "tableType": MATCHUP_TABLE_TYPE_ROTISSERIE,
+        "header": {"cells": [dict(c) for c in ROTISSERIE_HEADER_CELLS]},
+        "rows": rows,
+    }
+
+
+def build_standings_schedule_rotisserie() -> dict:
+    t1, t2, t3, t4 = TEAM_IDS
+
+    # Period 1: two H2hRotisserie2 matchups paired by matchupId. The first row
+    # seen for a matchupId becomes the away side, the second becomes the home
+    # side (see ScoringPeriodResult._h2h_rot_2_factory). Cell values are picked
+    # to exercise the plain-content path, the toolTip-takes-precedence path,
+    # the ValueError -> 0.0 fallback for non-numeric content, and the special
+    # "Pts" category that drives home_score/away_score.
+    rotisserie_rows = [
+        _roto_row("9001", t1, [_roto_cell("30"), _roto_cell("25"), _roto_cell("40", tool_tip="40.2"), _roto_cell("2.5")]),
+        _roto_row("9001", t2, [_roto_cell("N/A"), _roto_cell("28"), _roto_cell("33", tool_tip="33.1"), _roto_cell("1.5")]),
+        _roto_row("9002", t3, [_roto_cell("18"), _roto_cell("20"), _roto_cell("12"), _roto_cell("3.0")]),
+        _roto_row("9002", t4, [_roto_cell("15"), _roto_cell("16"), _roto_cell("22"), _roto_cell("1.0")]),
+    ]
+
+    return {
+        "tableList": [
+            _roto_table_entry("Period 1", _PERIOD_SUBCAPTIONS[1], rotisserie_rows),
+            # A second period reported under a tableType FantraxAPI doesn't
+            # recognize, shaped like the plain pre-scored rows -- exercises
+            # _matchup_factory's fallback to the generic Matchup class.
+            _season_table_entry(2, [(t1, "110.5", t3, "95.5"), (t2, "70.0", t4, "70.0")], table_type=MATCHUP_TABLE_TYPE_UNKNOWN),
+        ],
+        "displayedLists": {
+            "tabs": [
+                {"id": "main", "name": "Main"},
+                {"id": "PLAYOFFS", "name": "Playoffs"},
+                {"id": ".consolation", "name": "Consolation"},
+            ]
+        },
+    }
+
+
+def build_standings_playoffs_rotisserie() -> dict:
+    t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
+    rows = [
+        _roto_row("9101", t1, [_roto_cell("32"), _roto_cell("27"), _roto_cell("38"), _roto_cell("3.0")]),
+        _roto_row("9101", t2, [_roto_cell("29"), _roto_cell("24"), _roto_cell("44"), _roto_cell("1.0")]),
+    ]
+    return {
+        "displayedSelections": {"view": "PLAYOFFS"},
+        "displayedLists": {"tabs": [{"id": "PLAYOFFS", "name": "Playoffs"}, {"id": ".consolation", "name": "Consolation"}]},
+        "tableList": [
+            {"caption": "Standings", "subCaption": "(ignored)", "rows": []},
+            _roto_table_entry("Playoffs - Round 5", "(Mon Nov 11, 2024 - Sun Nov 17, 2024)", rows),
+        ],
+    }
+
+
+def build_standings_consolation_rotisserie() -> dict:
+    t3 = TEAM_IDS[2]
+    # Odd team count in this bracket -> Cedar Crushers draws a "Bye".
+    rows = [
+        _roto_row("9201", t3, [_roto_cell("20"), _roto_cell("19"), _roto_cell("16"), _roto_cell("2.0")]),
+        _roto_row("9201", BYE_TEAM_ID, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("0.0")], team_name="Bye"),
+    ]
+    return {
+        "displayedSelections": {"view": ".consolation"},
+        "displayedLists": {"tabs": [{"id": "PLAYOFFS", "name": "Playoffs"}, {"id": ".consolation", "name": "Consolation"}]},
+        "tableList": [
+            {"caption": "Standings", "subCaption": "(ignored)", "rows": []},
+            _roto_table_entry("Consolation - Round 5", "(Mon Nov 11, 2024 - Sun Nov 17, 2024)", rows),
         ],
     }
 
@@ -727,10 +845,15 @@ class MockSession:
 
     Pass ``force_error`` to make every call return a particular error/garbage shape
     instead of dispatching normally - used to test the exception paths in ``_request``.
+
+    Pass ``rotisserie=True`` to answer ``getStandings`` calls with H2hRotisserie2-shaped
+    schedule/playoff/consolation data instead of the default H2hPointsBased3-shaped data,
+    so the rotisserie matchup-parsing path can be exercised offline too.
     """
 
-    def __init__(self, force_error: str | None = None) -> None:
+    def __init__(self, force_error: str | None = None, rotisserie: bool = False) -> None:
         self.force_error = force_error
+        self.rotisserie = rotisserie
         self.post_calls: list[dict] = []
 
     def post(self, url: str, params: dict | None = None, json: dict | None = None, **kwargs: object) -> FakeResponse:
@@ -792,11 +915,11 @@ class MockSession:
     def _dispatch_standings(self, data: dict) -> dict:
         view = data.get("view")
         if view == "SCHEDULE":
-            return build_standings_schedule()
+            return build_standings_schedule_rotisserie() if self.rotisserie else build_standings_schedule()
         if view == "PLAYOFFS":
-            return build_standings_playoffs()
+            return build_standings_playoffs_rotisserie() if self.rotisserie else build_standings_playoffs()
         if view == ".consolation":
-            return build_standings_consolation()
+            return build_standings_consolation_rotisserie() if self.rotisserie else build_standings_consolation()
         if "period" in data:
             period_number = int(data["period"])
             if data.get("timeStartType") == "PERIOD_ONLY":
@@ -805,5 +928,5 @@ class MockSession:
         return build_standings_default()
 
 
-def new_mock_session(force_error: str | None = None) -> MockSession:
-    return MockSession(force_error=force_error)
+def new_mock_session(force_error: str | None = None, rotisserie: bool = False) -> MockSession:
+    return MockSession(force_error=force_error, rotisserie=rotisserie)

@@ -15,9 +15,11 @@ from datetime import date
 
 from fixtures_mocked import (
     _FUTURE_GAME_LABEL,
+    _matchup_cells,
     LEAGUE_ID,
     LEAGUE_NAME,
     LEAGUE_YEAR,
+    MATCHUP_TABLE_TYPE_UNKNOWN,
     PLAYER_CENTER,
     PLAYER_INJURED,
     PLAYER_OUT,
@@ -36,6 +38,7 @@ from fantraxapi import League, NotLoggedIn, NotTeamInLeague
 from fantraxapi.api import _request
 from fantraxapi.exceptions import DateNotInSeason, FantraxException, NotMemberOfLeague, PeriodNotInSeason
 from fantraxapi.objs import Player, Trade
+from fantraxapi.objs.scoring_period import H2HRotisserie2, Matchup
 
 
 def make_league(force_error: str | None = None) -> League:
@@ -122,7 +125,7 @@ class ScoringPeriodResultsTests(unittest.TestCase):
 
     def test_matchup_fields(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
-        matchup = results[1].matchups[1]
+        matchup = results[1].matchups["1"]
         self.assertEqual(matchup.away.name, "Anchorage Avalanche")
         self.assertEqual(matchup.home.name, "Bayview Bandits")
         self.assertEqual(matchup.away_score, 100.0)
@@ -134,10 +137,11 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(loser_score, 90.0)
         self.assertEqual(matchup.difference(), 10.0)
         self.assertEqual(str(matchup), "Period 1 Anchorage Avalanche (100.0) vs Bayview Bandits (90.0)")
+        self.assertEqual(matchup.composite_key, f"{matchup.home.id}_{matchup.away.id}")
 
     def test_matchup_tie(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
-        tied = results[2].matchups[2]
+        tied = results[2].matchups["2"]
         self.assertEqual(tied.away_score, 70.0)
         self.assertEqual(tied.home_score, 70.0)
         self.assertEqual(tied.winner(), (None, None, None, None))
@@ -145,6 +149,25 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         # Matchup.__str__ takes the "winner" branch whenever either score is truthy,
         # even on a tie - so a non-zero tie renders with empty winner/loser fields.
         self.assertEqual(str(tied), "Period 2 None (None) vs None (None)")
+
+    def test_composite_key_falls_back_to_raw_content_for_unresolved_teams(self) -> None:
+        # When a row's teamId doesn't match a league member, Matchup.away/home
+        # fall back to the raw "content" string rather than a Team instance --
+        # composite_key needs to handle that side too.
+        results = self.league.scoring_period_results(playoffs=False)
+        matchup = Matchup(
+            results[1],
+            "ghost",
+            [
+                {"teamId": "ghost-team-a", "content": "Ghost A"},
+                {"content": "10.0"},
+                {"teamId": "ghost-team-b", "content": "Ghost B"},
+                {"content": "5.0"},
+            ],
+        )
+        self.assertEqual(matchup.away, "Ghost A")
+        self.assertEqual(matchup.home, "Ghost B")
+        self.assertEqual(matchup.composite_key, "Ghost B_Ghost A")
 
     def test_playoffs_with_other_brackets(self) -> None:
         results = self.league.scoring_period_results(season=False, playoffs=True)
@@ -155,7 +178,7 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(playoff_result.days, 7)
         self.assertIn("Consolation", playoff_result.other_brackets)
         self.assertEqual(len(playoff_result.other_brackets["Consolation"]), 1)
-        consolation_matchup = playoff_result.other_brackets["Consolation"][1]
+        consolation_matchup = playoff_result.other_brackets["Consolation"]["1"]
         self.assertEqual(consolation_matchup.away.name, "Cedar Crushers")
         self.assertEqual(consolation_matchup.home.name, "Dockside Dragons")
         self.assertEqual(str(consolation_matchup), "Playoff Period 5 Cedar Crushers (150.0) vs Dockside Dragons (140.0)")
@@ -167,6 +190,95 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(len(results), 5)
         self.assertFalse(results[4].playoffs)
         self.assertTrue(results[5].playoffs)
+
+
+class RotisserieScoringPeriodResultsTests(unittest.TestCase):
+    """Mocked coverage for the H2hRotisserie2 parsing path.
+
+    ScoringPeriodResultsTests above only ever sees H2hPointsBased3-shaped data
+    (the only tableType the shared fixture league reports), so H2HRotisserie2,
+    _h2h_rot_2_factory, scoring_grid/categories, the bye-team fallback, and
+    other_brackets routed through rotisserie-shaped data were previously only
+    reachable via the live, network-dependent tests in test_live_matchup_types.py.
+    This uses a separate MockSession(rotisserie=True) so the fixtures above stay
+    untouched.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.league = League(LEAGUE_ID, session=new_mock_session(rotisserie=True))
+
+    def test_h2h_rotisserie_matchup_fields(self) -> None:
+        results = self.league.scoring_period_results(playoffs=False)
+        self.assertEqual(results[1].matchup_type, "H2hRotisserie2")
+        # Unlike H2hPointsBased3 (keyed by 1-based row position), _h2h_rot_2_factory
+        # keys matchups by their matchupId straight from the row data.
+        self.assertEqual(set(results[1].matchups), {"9001", "9002"})
+        matchup = results[1].matchups["9001"]
+        self.assertIsInstance(matchup, H2HRotisserie2)
+        self.assertEqual(matchup.away.name, "Anchorage Avalanche")
+        self.assertEqual(matchup.home.name, "Bayview Bandits")
+        self.assertEqual(matchup.away_score, 2.5)
+        self.assertEqual(matchup.home_score, 1.5)
+        self.assertEqual(matchup.home_categories["opponent"], matchup.away.id)
+        self.assertEqual(matchup.away_categories["opponent"], matchup.home.id)
+        # toolTip wins over plain "content" when both are present
+        self.assertEqual(matchup.scoring_grid["PIM"], {matchup.home.id: 33.1, matchup.away.id: 40.2})
+        # non-numeric content falls back to 0.0 (home side) rather than raising
+        self.assertEqual(matchup.scoring_grid["G"], {matchup.home.id: 0.0, matchup.away.id: 30.0})
+        self.assertEqual(matchup.home_categories["G"], 0.0)
+        self.assertEqual(matchup.away_categories["G"], 30.0)
+        # The "Pts" category is what drives home_score/away_score
+        self.assertEqual(matchup.scoring_grid["Pts"], {matchup.home.id: 1.5, matchup.away.id: 2.5})
+        self.assertEqual(matchup.composite_key, f"{matchup.home.id}_{matchup.away.id}")
+
+    def test_h2h_rotisserie_second_matchup(self) -> None:
+        results = self.league.scoring_period_results(playoffs=False)
+        matchup = results[1].matchups["9002"]
+        self.assertIsInstance(matchup, H2HRotisserie2)
+        self.assertEqual(matchup.away.name, "Cedar Crushers")
+        self.assertEqual(matchup.home.name, "Dockside Dragons")
+        self.assertEqual(matchup.away_score, 3.0)
+        self.assertEqual(matchup.home_score, 1.0)
+        self.assertEqual(matchup.scoring_grid["PIM"], {matchup.home.id: 22.0, matchup.away.id: 12.0})
+
+    def test_unrecognized_table_type_falls_back_to_base_matchup(self) -> None:
+        results = self.league.scoring_period_results(playoffs=False)
+        self.assertEqual(results[2].matchup_type, MATCHUP_TABLE_TYPE_UNKNOWN)
+        matchup = results[2].matchups["1"]
+        self.assertIs(type(matchup), Matchup)
+        self.assertEqual(matchup.away.name, "Anchorage Avalanche")
+        self.assertEqual(matchup.away_score, 110.5)
+
+    def test_other_brackets_with_rotisserie_data(self) -> None:
+        results = self.league.scoring_period_results(season=False, playoffs=True)
+        playoff_result = results[5]
+        self.assertIn("Consolation", playoff_result.other_brackets)
+        bracket = playoff_result.other_brackets["Consolation"]
+        self.assertEqual(set(bracket), {"9201"})
+        consolation_matchup = bracket["9201"]
+        self.assertIsInstance(consolation_matchup, H2HRotisserie2)
+        self.assertEqual(consolation_matchup.away.name, "Cedar Crushers")
+        # The bracket's other slot is an unrecognized teamId -> bye placeholder Team
+        self.assertEqual(consolation_matchup.home.name, "Bye")
+        self.assertEqual(consolation_matchup.home.short, "BYE")
+        # composite_key works against the placeholder Team just like a real one
+        self.assertEqual(consolation_matchup.composite_key, f"bye_{consolation_matchup.away.id}")
+
+    def test_add_matchups(self) -> None:
+        results = self.league.scoring_period_results(playoffs=False)
+        result = results[2]
+        self.assertEqual(set(result.matchups), {"1", "2"})
+        t1, t4 = TEAM_IDS[0], TEAM_IDS[3]
+        result.add_matchups({"rows": [_matchup_cells(t1, "200.0", t4, "150.0")]})
+        # add_matchups merges by stringified 1-based row position, so this overwrites key "1"...
+        self.assertEqual(set(result.matchups), {"1", "2"})
+        self.assertEqual(result.matchups["1"].away.name, "Anchorage Avalanche")
+        self.assertEqual(result.matchups["1"].away_score, 200.0)
+        self.assertEqual(result.matchups["1"].home.name, "Dockside Dragons")
+        self.assertEqual(result.matchups["1"].home_score, 150.0)
+        # ...while leaving the other entry untouched
+        self.assertEqual(result.matchups["2"].away.name, "Bayview Bandits")
 
 
 class StandingsTests(unittest.TestCase):

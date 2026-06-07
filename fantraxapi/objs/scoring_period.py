@@ -65,8 +65,8 @@ class ScoringPeriodResult(FantraxBaseObject):
         complete (bool): Is the Period Complete?
         current (bool): Is it the current Period?
         future (bool): Is the Period in the future?
-        matchups (dict[int, Matchup]): Dict of Matchups with matchup ids as the key.
-        other_brackets (dict[str, dict[int, Matchup]]): Dictionary of Bracket Name to its Matchups.
+        matchups (dict[str, Matchup]): Dict of Matchups with matchup ids as the key.
+        other_brackets (dict[str, dict[str, Matchup]]): Dictionary of Bracket Name to its Matchups.
         title (str): Title of the Period.
 
     """
@@ -98,19 +98,19 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.complete: bool = now > self.next
         self.current: bool = self.start < now < self.next
         self.future: bool = now < self.start
-        self.matchups: dict[int, Matchup] = self._matchup_factory(data)
-        self.other_brackets: dict[str, dict[int, Matchup]] = {}
+        self.matchups: dict[str, Matchup] = self._matchup_factory(data)
+        self.other_brackets: dict[str, dict[str, Matchup]] = {}
         if other_data:
             for name, obj in other_data:
                 self.other_brackets.setdefault(name, {}).update(self._matchup_factory(obj))
 
-    def _matchup_factory(self, data) -> dict[int, Matchup]:
+    def _matchup_factory(self, data) -> dict[str, Matchup]:
         if matchup_method := self.matchup_types.get(self.matchup_type):
             return matchup_method(data)
         else:
-            return {i: Matchup(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
+            return {str(i): Matchup(self, str(i), matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
 
-    def _h2h_rot_2_factory(self, data) -> dict[int, H2HRotisserie2]:
+    def _h2h_rot_2_factory(self, data) -> dict[str, H2HRotisserie2]:
         res = dict()
         matchup_dict = dict()
         for row in data["rows"]:
@@ -121,8 +121,8 @@ class ScoringPeriodResult(FantraxBaseObject):
                 matchup_dict.update({muid: row})
         return res
 
-    def _h2h_points_based_3_factory(self, data) -> dict[int, H2hPointsBased3]:
-        return {i: H2hPointsBased3(self, i, matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
+    def _h2h_points_based_3_factory(self, data) -> dict[str, H2hPointsBased3]:
+        return {str(i): H2hPointsBased3(self, str(i), matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
 
     def add_matchups(self, data):
         self.matchups.update(self._matchup_factory(data))
@@ -153,18 +153,19 @@ class Matchup(FantraxBaseObject):
     Attributes:
         league (League): The League instance this object belongs to.
         scoring_period (ScoringPeriodResult): Scoring Period result this instance belongs to.
-        matchup_key (int): Team ID.
+        matchup_key (str): Matchup Key.
         away (Team): Away Team.
         away_score (float): Away Team Score.
         home (Team): Home Team.
         home_score (float): Home Team Score.
+        composite_key (str): "<home_team_id>_<away_team_id>" key built from this Matchup's two sides.
 
     """
 
-    def __init__(self, scoring_period: ScoringPeriodResult, matchup_key: int, data: dict) -> None:
+    def __init__(self, scoring_period: ScoringPeriodResult, matchup_key: str, data: dict) -> None:
         super().__init__(scoring_period.league, data)
         self.scoring_period: ScoringPeriodResult = scoring_period
-        self.matchup_key: int = matchup_key
+        self.matchup_key: str = matchup_key
         try:
             self.away: Team | str = self.league.team(self._data[0]["teamId"])
         except NotTeamInLeague:
@@ -183,6 +184,12 @@ class Matchup(FantraxBaseObject):
     @property
     def home_score(self) -> float:
         return float(self._home_score)
+
+    @property
+    def composite_key(self) -> str:
+        home_id = self.home.id if isinstance(self.home, Team) else self.home
+        away_id = self.away.id if isinstance(self.away, Team) else self.away
+        return f"{home_id}_{away_id}"
 
     def winner(self) -> tuple[Team | str, float, Team | str, float] | tuple[None, None, None, None]:
         if self.away_score > self.home_score:
@@ -220,7 +227,7 @@ class H2HRotisserie2(Matchup):
     home_score = 0.5
     away_score = 0.5
 
-    def __init__(self, scoring_period: ScoringPeriodResult, matchup_key: int, data: dict, home_data: dict, away_data: dict):
+    def __init__(self, scoring_period: ScoringPeriodResult, matchup_key: str, data: dict, home_data: dict, away_data: dict):
         FantraxBaseObject.__init__(self, scoring_period.league, data)
         self.scoring_period = scoring_period
         self.matchup_key = matchup_key
@@ -286,7 +293,7 @@ class H2hPointsBased3(Matchup):
     Attributes:
             league (League): The League instance this object belongs to.
             scoring_period (ScoringPeriodResult): Scoring Period result this instance belongs to.
-            matchup_key (int): Team ID.
+            matchup_key (str): Matchup Key.
             away (:class:`~Team`): Away Team.
             away_score (float): Away Team Score.
             home (:class:`~Team`): Home Team.
