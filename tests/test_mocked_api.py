@@ -265,6 +265,19 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         # composite_key works against the placeholder Team just like a real one
         self.assertEqual(consolation_matchup.composite_key, f"bye_{consolation_matchup.away.id}")
 
+    def test_playoff_round_number_does_not_overwrite_season_week(self) -> None:
+        # The rotisserie playoff fixture is captioned "Scoring Period: Playoffs 1"
+        # (the style real NBA leagues use). The round number used to be parsed as a
+        # season week number, so this playoff round landed on key 1 and clobbered
+        # Period 1; it belongs at key 5 via its date range.
+        results = self.league.scoring_period_results()
+        self.assertEqual(set(results), {1, 2, 5})
+        self.assertFalse(results[1].playoffs)
+        self.assertEqual(results[1].name, "Period 1")
+        self.assertTrue(results[5].playoffs)
+        self.assertEqual(results[5].name, "Scoring Period: Playoffs 1")
+        self.assertEqual(results[5].title, "Playoff Period 5")
+
     def test_add_matchups(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
         result = results[2]

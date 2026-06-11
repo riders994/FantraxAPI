@@ -71,7 +71,7 @@ class ScoringPeriodResult(FantraxBaseObject):
 
     """
 
-    def __init__(self, league: "League", data: dict, other_data: list[tuple[str, dict]] = None) -> None:
+    def __init__(self, league: "League", data: dict, other_data: list[tuple[str, dict]] = None, playoffs: bool | None = None) -> None:
         super().__init__(league, data)
         self.name: str = self._data["caption"]
 
@@ -82,7 +82,9 @@ class ScoringPeriodResult(FantraxBaseObject):
 
         self.matchup_type = data['tableType']
 
-        self.playoffs: bool = self.name.startswith("Playoffs")
+        # Caption styles vary by league ("Playoffs - Round 1", "Scoring Period: Playoffs 1"),
+        # so callers that know the table came from a playoff view should pass playoffs explicitly.
+        self.playoffs: bool = "Playoffs" in self.name if playoffs is None else playoffs
         dates = self._data["subCaption"][1:-1].split(" - ")
         self.start: date = datetime.strptime(dates[0], "%a %b %d, %Y").date()
         self.end: date = datetime.strptime(dates[1], "%a %b %d, %Y").date()

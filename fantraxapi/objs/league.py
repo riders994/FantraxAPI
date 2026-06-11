@@ -160,7 +160,7 @@ class League:
                 if obj["caption"] == "Standings":
                     continue
                 playoff_number = int(re.search(r"(\d+)$", obj["caption"]).group())
-                scoring_period = ScoringPeriodResult(self, obj, other_data=other_data[playoff_number] if playoff_number in other_data else None)
+                scoring_period = ScoringPeriodResult(self, obj, other_data=other_data[playoff_number] if playoff_number in other_data else None, playoffs=True)
                 periods[scoring_period.period.number] = scoring_period
 
         return periods

@@ -438,7 +438,11 @@ def build_standings_playoffs_rotisserie() -> dict:
         "displayedLists": {"tabs": [{"id": "PLAYOFFS", "name": "Playoffs"}, {"id": ".consolation", "name": "Consolation"}]},
         "tableList": [
             {"caption": "Standings", "subCaption": "(ignored)", "rows": []},
-            _roto_table_entry("Playoffs - Round 5", "(Mon Nov 11, 2024 - Sun Nov 17, 2024)", rows),
+            # Real NBA leagues caption playoff tables "Scoring Period: Playoffs <round>"
+            # rather than "Playoffs - Round <round>" (see build_standings_playoffs).
+            # Round 1 deliberately collides with season Period 1: the round number must
+            # never be mistaken for a season week number.
+            _roto_table_entry("Scoring Period: Playoffs 1", "(Mon Nov 11, 2024 - Sun Nov 17, 2024)", rows),
         ],
     }
 
@@ -455,7 +459,7 @@ def build_standings_consolation_rotisserie() -> dict:
         "displayedLists": {"tabs": [{"id": "PLAYOFFS", "name": "Playoffs"}, {"id": ".consolation", "name": "Consolation"}]},
         "tableList": [
             {"caption": "Standings", "subCaption": "(ignored)", "rows": []},
-            _roto_table_entry("Consolation - Round 5", "(Mon Nov 11, 2024 - Sun Nov 17, 2024)", rows),
+            _roto_table_entry("Scoring Period: Playoffs 1", "(Mon Nov 11, 2024 - Sun Nov 17, 2024)", rows),
         ],
     }
 
