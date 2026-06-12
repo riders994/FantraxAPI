@@ -300,6 +300,8 @@ class StandingsTests(unittest.TestCase):
         cls.league = make_league()
 
     def test_default_standings(self) -> None:
+        # Once playoffs exist, the viewless getStandings response is the PLAYOFFS view
+        # (see build_standings_default), so standings() must re-request the season view.
         standings = self.league.standings()
         self.assertEqual(
             str(standings),
@@ -311,19 +313,39 @@ class StandingsTests(unittest.TestCase):
                 "4: Dockside Dragons (1-3-0)"
             ),
         )
+        last_view = self.league.session.post_calls[-1]["json"]["msgs"][-1]["data"]["view"]
+        self.assertEqual(last_view, "REGULAR_SEASON")
         record = standings.ranks[1]
         self.assertEqual(record.team.name, "Anchorage Avalanche")
         self.assertEqual(record.win, 4)
         self.assertEqual(record.loss, 0)
         self.assertEqual(record.tie, 0)
-        self.assertEqual(record.points, 8)
+        # The season fixture mirrors leagues whose standings use the gb/cpf/cpa column
+        # keys (and no points/wwOrder columns at all)
+        self.assertEqual(record.points, 0)
         self.assertEqual(record.win_percentage, 1.0)
-        self.assertEqual(record.games_back, 0)
+        self.assertEqual(record.games_back, 0.0)  # leader shows gb "-"
         self.assertEqual(record.points_for, 405.5)
         self.assertEqual(record.points_against, 300.0)
         self.assertEqual(record.streak, "W4")
+        self.assertEqual(standings.ranks[3].games_back, 3.5)
         self.assertEqual(str(record), "1: Anchorage Avalanche (4-0-0)")
         self.assertIsNone(standings.scoring_period_number)
+
+    def test_playoff_standings(self) -> None:
+        standings = self.league.playoff_standings()
+        self.assertEqual(len(standings.ranks), 2)
+        self.assertEqual(standings.ranks[1].team.name, "Anchorage Avalanche")
+        self.assertEqual(standings.ranks[1].win, 1)
+        self.assertEqual(standings.ranks[2].team.name, "Bayview Bandits")
+        self.assertEqual(standings.ranks[2].loss, 1)
+        self.assertEqual(str(standings), "Standings\n1: Anchorage Avalanche (1-0-0)\n2: Bayview Bandits (0-1-0)")
+
+    def test_playoff_standings_without_playoffs_raises(self) -> None:
+        league = League(LEAGUE_ID, session=new_mock_session(no_playoffs=True))
+        self.assertRaises(FantraxException, league.playoff_standings)
+        # standings() still works without a re-request in a playoff-less league
+        self.assertEqual(league.standings().ranks[1].team.name, "Anchorage Avalanche")
 
     def test_standings_by_period(self) -> None:
         standings = self.league.standings(scoring_period_number=2)

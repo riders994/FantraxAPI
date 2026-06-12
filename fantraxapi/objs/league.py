@@ -6,7 +6,7 @@ from requests import Session
 
 from fantraxapi import NotLoggedIn, NotTeamInLeague, api
 
-from ..exceptions import DateNotInSeason, PeriodNotInSeason
+from ..exceptions import DateNotInSeason, FantraxException, PeriodNotInSeason
 from .player import LivePlayer
 from .position import Position, PositionCount
 from .roster import Roster
@@ -182,7 +182,29 @@ class League:
             kwargs["timeframeType"] = "BY_PERIOD"
             kwargs["timeStartType"] = "PERIOD_ONLY" if only_period else "FROM_SEASON_START"
         response = api.get_standings(self, **kwargs)
+        # Once playoffs start, Fantrax defaults to the playoff view, so re-request the
+        # season standings view: COMBINED for divisional leagues, REGULAR_SEASON otherwise.
+        displayed_view = response.get("displayedSelections", {}).get("view")
+        tab_ids = [tab["id"] for tab in response.get("displayedLists", {}).get("tabs", [])]
+        season_view = next((v for v in ("COMBINED", "REGULAR_SEASON") if v in tab_ids), None)
+        if season_view and displayed_view != season_view:
+            response = api.get_standings(self, view=season_view, **kwargs)
         return Standings(self, response["tableList"][0], scoring_period_number=scoring_period_number)
+
+    def playoff_standings(self) -> Standings:
+        """Returns Standings object for the playoff bracket.
+
+        Returns:
+            Standings: Standings object for the playoff bracket.
+
+        Raises:
+            FantraxException: When the League has no playoff standings.
+
+        """
+        response = api.get_standings(self, view="PLAYOFFS")
+        if response.get("displayedSelections", {}).get("view") != "PLAYOFFS":
+            raise FantraxException(f"League {self.name} has no playoff standings")
+        return Standings(self, response["tableList"][0])
 
     def pending_trades(self) -> list[Trade]:
         """Returns a list of Trade objects that represent pending trades.

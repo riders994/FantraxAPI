@@ -312,9 +312,9 @@ def build_standings_playoffs() -> dict:
     t1, t2, t3, t4 = TEAM_IDS
     return {
         "displayedSelections": {"view": "PLAYOFFS"},
-        "displayedLists": {"tabs": [{"id": "PLAYOFFS", "name": "Playoffs"}, {"id": ".consolation", "name": "Consolation"}]},
+        "displayedLists": {"tabs": _standings_tabs()},
         "tableList": [
-            {"caption": "Standings", "subCaption": "(ignored)", "rows": []},
+            _playoff_standings_table(),
             {
                 "caption": "Playoffs - Round 5",
                 "subCaption": "(Mon Nov 11, 2024 - Sun Nov 17, 2024)",
@@ -435,9 +435,9 @@ def build_standings_playoffs_rotisserie() -> dict:
     ]
     return {
         "displayedSelections": {"view": "PLAYOFFS"},
-        "displayedLists": {"tabs": [{"id": "PLAYOFFS", "name": "Playoffs"}, {"id": ".consolation", "name": "Consolation"}]},
+        "displayedLists": {"tabs": _standings_tabs()},
         "tableList": [
-            {"caption": "Standings", "subCaption": "(ignored)", "rows": []},
+            _playoff_standings_table(),
             # Real NBA leagues caption playoff tables "Scoring Period: Playoffs <round>"
             # rather than "Playoffs - Round <round>" (see build_standings_playoffs).
             # Round 1 deliberately collides with season Period 1: the round number must
@@ -469,60 +469,81 @@ def build_standings_consolation_rotisserie() -> dict:
 # ---------------------------------------------------------------------------
 
 
-def _standings_header() -> dict:
+def _standings_header(alias_keys: bool = False) -> dict:
+    # Column keys vary by league: some leagues report gamesback/pointsFor/pointsAgainst
+    # (with points and wwOrder columns), others gb/cpf/cpa (without them).
+    if alias_keys:
+        stat_keys = ["win", "loss", "tie", "winpc", "gb", "cpf", "cpa", "streak"]
+    else:
+        stat_keys = ["win", "loss", "tie", "points", "winpc", "gamesback", "pointsFor", "pointsAgainst", "streak"]
+    return {"cells": [{"key": "rank"}, {"key": "team"}] + [{"key": k} for k in stat_keys]}
+
+
+def _standings_row(rank: int, team_id: str, win: int, loss: int, tie: int, points: int, winpc: str, gb: str, pf: str, pa: str, streak: str, alias_keys: bool = False) -> dict:
+    stats = [str(win), str(loss), str(tie)]
+    stats += [winpc, gb, pf, pa, streak] if alias_keys else [str(points), winpc, gb, pf, pa, streak]
     return {
-        "cells": [
-            {"key": "rank"},
-            {"key": "team"},
-            {"key": "win"},
-            {"key": "loss"},
-            {"key": "tie"},
-            {"key": "points"},
-            {"key": "winpc"},
-            {"key": "gamesback"},
-            {"key": "pointsFor"},
-            {"key": "pointsAgainst"},
-            {"key": "streak"},
-        ]
+        "fixedCells": [{"content": str(rank)}, {"teamId": team_id, "content": TEAM_IDS_TO_NAMES[team_id]}],
+        "cells": [{"content": str(rank)}, {"content": TEAM_IDS_TO_NAMES[team_id]}] + [{"content": s} for s in stats],
     }
 
 
-def _standings_row(rank: int, team_id: str, win: int, loss: int, tie: int, points: int, winpc: str, gb: str, pf: str, pa: str, streak: str) -> dict:
+def _standings_table(rows: list[dict], alias_keys: bool = False) -> dict:
+    return {"header": _standings_header(alias_keys=alias_keys), "rows": rows, "fantasyTeamInfo": _team_data_map()}
+
+
+def _standings_tabs() -> list[dict]:
+    return [
+        {"id": "REGULAR_SEASON", "name": "Regular Season"},
+        {"id": "PLAYOFFS", "name": "Playoffs"},
+        {"id": ".consolation", "name": "Consolation"},
+    ]
+
+
+def _playoff_standings_table() -> dict:
+    # The playoff view's standings table uses a reduced header (no season columns).
+    # ScoringPeriodResult parsing skips it by its "Standings" caption;
+    # League.playoff_standings() parses it.
+    t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
     return {
-        "fixedCells": [{"content": str(rank)}, {"teamId": team_id, "content": TEAM_IDS_TO_NAMES[team_id]}],
-        "cells": [
-            {"content": str(rank)},
-            {"content": TEAM_IDS_TO_NAMES[team_id]},
-            {"content": str(win)},
-            {"content": str(loss)},
-            {"content": str(tie)},
-            {"content": str(points)},
-            {"content": winpc},
-            {"content": gb},
-            {"content": pf},
-            {"content": pa},
-            {"content": streak},
+        "caption": "Standings",
+        "header": {"cells": [{"key": "rank"}, {"key": "team"}, {"key": "win"}, {"key": "loss"}, {"key": "tie"}, {"key": "cp"}]},
+        "rows": [
+            {
+                "fixedCells": [{"content": "1"}, {"teamId": t1, "content": TEAM_IDS_TO_NAMES[t1]}],
+                "cells": [{"content": "1"}, {"content": TEAM_IDS_TO_NAMES[t1]}, {"content": "1"}, {"content": "0"}, {"content": "0"}, {"content": "2"}],
+            },
+            {
+                "fixedCells": [{"content": "2"}, {"teamId": t2, "content": TEAM_IDS_TO_NAMES[t2]}],
+                "cells": [{"content": "2"}, {"content": TEAM_IDS_TO_NAMES[t2]}, {"content": "0"}, {"content": "1"}, {"content": "0"}, {"content": "0"}],
+            },
         ],
     }
 
 
-def _standings_table(rows: list[dict]) -> dict:
-    return {"header": _standings_header(), "rows": rows, "fantasyTeamInfo": _team_data_map()}
-
-
 def build_standings_default() -> dict:
+    # Once playoffs exist, a viewless getStandings answers with the PLAYOFFS view --
+    # League.standings() must spot this and re-request the season view.
+    return build_standings_playoffs()
+
+
+def build_standings_regular_season() -> dict:
     t1, t2, t3, t4 = TEAM_IDS
     return {
+        "displayedSelections": {"view": "REGULAR_SEASON"},
+        "displayedLists": {"tabs": _standings_tabs()},
         "tableList": [
             _standings_table(
                 [
-                    _standings_row(1, t1, 4, 0, 0, 8, "1.000", "0", "405.5", "300.0", "W4"),
-                    _standings_row(2, t2, 2, 2, 0, 4, "0.500", "2", "350.0", "350.0", "L1"),
-                    _standings_row(3, t3, 1, 3, 0, 2, "0.250", "3", "330.0", "365.0", "L2"),
-                    _standings_row(4, t4, 1, 3, 0, 2, "0.250", "3", "248.3", "318.3", "W1"),
-                ]
+                    # gb "-" mirrors how Fantrax marks the leader; "3.5" covers fractional games back
+                    _standings_row(1, t1, 4, 0, 0, 8, "1.000", "-", "405.5", "300.0", "W4", alias_keys=True),
+                    _standings_row(2, t2, 2, 2, 0, 4, "0.500", "2", "350.0", "350.0", "L1", alias_keys=True),
+                    _standings_row(3, t3, 1, 3, 0, 2, "0.250", "3.5", "330.0", "365.0", "L2", alias_keys=True),
+                    _standings_row(4, t4, 1, 3, 0, 2, "0.250", "3.5", "248.3", "318.3", "W1", alias_keys=True),
+                ],
+                alias_keys=True,
             )
-        ]
+        ],
     }
 
 
@@ -853,11 +874,15 @@ class MockSession:
     Pass ``rotisserie=True`` to answer ``getStandings`` calls with H2hRotisserie2-shaped
     schedule/playoff/consolation data instead of the default H2hPointsBased3-shaped data,
     so the rotisserie matchup-parsing path can be exercised offline too.
+
+    Pass ``no_playoffs=True`` to mimic a league without playoffs: every standings view,
+    including an explicit ``PLAYOFFS`` request, answers with the regular season view.
     """
 
-    def __init__(self, force_error: str | None = None, rotisserie: bool = False) -> None:
+    def __init__(self, force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False) -> None:
         self.force_error = force_error
         self.rotisserie = rotisserie
+        self.no_playoffs = no_playoffs
         self.post_calls: list[dict] = []
 
     def post(self, url: str, params: dict | None = None, json: dict | None = None, **kwargs: object) -> FakeResponse:
@@ -920,17 +945,22 @@ class MockSession:
         view = data.get("view")
         if view == "SCHEDULE":
             return build_standings_schedule_rotisserie() if self.rotisserie else build_standings_schedule()
-        if view == "PLAYOFFS":
+        if view == "PLAYOFFS" and not self.no_playoffs:
             return build_standings_playoffs_rotisserie() if self.rotisserie else build_standings_playoffs()
         if view == ".consolation":
             return build_standings_consolation_rotisserie() if self.rotisserie else build_standings_consolation()
+        if view in ("REGULAR_SEASON", "COMBINED"):
+            return build_standings_regular_season()
         if "period" in data:
             period_number = int(data["period"])
             if data.get("timeStartType") == "PERIOD_ONLY":
                 return build_standings_only_period(period_number)
             return build_standings_by_period(period_number)
+        if self.no_playoffs:
+            # Without playoffs there's no playoff view for Fantrax to default to
+            return build_standings_regular_season()
         return build_standings_default()
 
 
-def new_mock_session(force_error: str | None = None, rotisserie: bool = False) -> MockSession:
-    return MockSession(force_error=force_error, rotisserie=rotisserie)
+def new_mock_session(force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False) -> MockSession:
+    return MockSession(force_error=force_error, rotisserie=rotisserie, no_playoffs=no_playoffs)

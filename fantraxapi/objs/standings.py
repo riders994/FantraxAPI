@@ -49,7 +49,7 @@ class Record(FantraxBaseObject):
         tie (int): Number of Ties.
         points (int): Number of Points.
         win_percentage (float): Win Percentage.
-        games_back (int): Number of Games Back.
+        games_back (float): Number of Games Back.
         wavier_wire_order (int): Wavier Wire Claim Order.
         points_for (float): Fantasy Points For.
         points_against (float): Fantasy Points Against.
@@ -62,17 +62,25 @@ class Record(FantraxBaseObject):
         self.standings: Standings = standings
         self.team: Team = self.league.team(team_id)
         self.rank: int = rank
-        self.win: int = int(self._data[fields["win"]]["content"]) if "win" in fields else 0
-        self.loss: int = int(self._data[fields["loss"]]["content"]) if "loss" in fields else 0
-        self.tie: int = int(self._data[fields["tie"]]["content"]) if "tie" in fields else 0
-        self.points: int = int(self._data[fields["points"]]["content"]) if "points" in fields else 0
-        winpc_raw: str = self._data[fields["winpc"]]["content"] if "winpc" in fields else 0
-        self.win_percentage: float = float(winpc_raw) if winpc_raw != "-" else 0.0
-        self.games_back: int = int(self._data[fields["gamesback"]]["content"]) if "gamesback" in fields else 0
-        self.wavier_wire_order: int = int(self._data[fields["wwOrder"]]["content"]) if "wwOrder" in fields else 0
-        self.points_for: float = float(self._data[fields["pointsFor"]]["content"].replace(",", "")) if "pointsFor" in fields else 0.0
-        self.points_against: float = float(self._data[fields["pointsAgainst"]]["content"].replace(",", "")) if "pointsAgainst" in fields else 0.0
-        self.streak: str = self._data[fields["streak"]]["content"] if "streak" in fields else ""
+        def content(*keys: str) -> str | None:
+            # Column keys vary by league: e.g. games back / fantasy points for / against
+            # arrive as gamesback/pointsFor/pointsAgainst in some leagues and gb/cpf/cpa in others.
+            return next((self._data[fields[key]]["content"] for key in keys if key in fields), None)
+
+        self.win: int = int(content("win") or 0)
+        self.loss: int = int(content("loss") or 0)
+        self.tie: int = int(content("tie") or 0)
+        self.points: int = int(content("points") or 0)
+        winpc_raw = content("winpc")
+        self.win_percentage: float = float(winpc_raw) if winpc_raw and winpc_raw != "-" else 0.0
+        gb_raw = content("gamesback", "gb")
+        self.games_back: float = float(gb_raw) if gb_raw and gb_raw != "-" else 0.0
+        self.wavier_wire_order: int = int(content("wwOrder") or 0)
+        pf_raw = content("pointsFor", "cpf")
+        self.points_for: float = float(pf_raw.replace(",", "")) if pf_raw else 0.0
+        pa_raw = content("pointsAgainst", "cpa")
+        self.points_against: float = float(pa_raw.replace(",", "")) if pa_raw else 0.0
+        self.streak: str = content("streak") or ""
 
     def __str__(self) -> str:
         return f"{self.rank}: {self.team} ({self.win}-{self.loss}-{self.tie})"
