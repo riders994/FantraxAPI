@@ -88,7 +88,16 @@ class League:
     def _update_teams(self, team_data: dict | list) -> None:
         if isinstance(team_data, list):
             team_data = {data["id"]: data for data in team_data}
-        self.teams = [Team(self, team_id, data) for team_id, data in team_data.items()]
+        # Data sources carry different team fields (standings responses lack the
+        # commissioner flag and most logo sizes), so merge into what's already known
+        # instead of downgrading, and keep any already-fetched owners.
+        previous = {t.id: t for t in getattr(self, "teams", [])}
+        self.teams = []
+        for team_id, data in team_data.items():
+            team = Team(self, team_id, previous[team_id]._data | data if team_id in previous else data)
+            if team_id in previous:
+                team._owners = previous[team_id]._owners
+            self.teams.append(team)
         self._team_lookup = None
 
     @property

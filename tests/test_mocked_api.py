@@ -100,6 +100,34 @@ class LeagueInfoTests(unittest.TestCase):
         self.assertEqual(self.league.team("bandits").name, "Bayview Bandits")
         self.assertRaises(NotTeamInLeague, self.league.team, "NotARealTeamIdentifier")
 
+    def test_team_metadata(self) -> None:
+        league = make_league()
+        team = league.team(TEAM_IDS[0])
+        self.assertTrue(team.commissioner)
+        self.assertFalse(league.team(TEAM_IDS[1]).commissioner)
+        calls = len(league.session.post_calls)
+        self.assertEqual(team.owners, "anchor_andy")
+        self.assertEqual(len(league.session.post_calls), calls + 1)
+        # second access is served from the cache
+        self.assertEqual(team.owners, "anchor_andy")
+        self.assertEqual(len(league.session.post_calls), calls + 1)
+        self.assertEqual(league.team(TEAM_IDS[3]).owners, "dock_dana")
+
+    def test_team_metadata_survives_team_updates(self) -> None:
+        # Standings responses carry a reduced team payload (no commissioner flag),
+        # and any team-bearing response rebuilds league.teams -- richer fields and
+        # the owners cache must survive the rebuild.
+        league = make_league()
+        team = league.team(TEAM_IDS[0])
+        self.assertEqual(team.owners, "anchor_andy")
+        league.standings()
+        refreshed = league.team(TEAM_IDS[0])
+        self.assertIsNot(refreshed, team)
+        self.assertTrue(refreshed.commissioner)
+        calls = len(league.session.post_calls)
+        self.assertEqual(refreshed.owners, "anchor_andy")
+        self.assertEqual(len(league.session.post_calls), calls)
+
     def test_construction_failure_propagates(self) -> None:
         # If get_init_info itself errors out (e.g. bad league), construction should
         # raise rather than yielding a half-built League.

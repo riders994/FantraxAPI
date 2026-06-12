@@ -54,12 +54,21 @@ STATUSES = {
 }
 
 TEAMS = [
-    {"id": "team1id00000aaaa", "name": "Anchorage Avalanche", "shortName": "ANC", "logoUrl512": "https://example.com/anc.png"},
-    {"id": "team2id00000bbbb", "name": "Bayview Bandits", "shortName": "BAY", "logoUrl256": "https://example.com/bay.png"},
-    {"id": "team3id00000cccc", "name": "Cedar Crushers", "shortName": "CED", "logoUrl128": "https://example.com/ced.png"},
-    {"id": "team4id00000dddd", "name": "Dockside Dragons", "shortName": "DOX", "logoUrl512": "https://example.com/dox.png"},
+    {"id": "team1id00000aaaa", "name": "Anchorage Avalanche", "shortName": "ANC", "logoUrl512": "https://example.com/anc.png", "commissioner": True},
+    {"id": "team2id00000bbbb", "name": "Bayview Bandits", "shortName": "BAY", "logoUrl256": "https://example.com/bay.png", "commissioner": False},
+    {"id": "team3id00000cccc", "name": "Cedar Crushers", "shortName": "CED", "logoUrl128": "https://example.com/ced.png", "commissioner": False},
+    {"id": "team4id00000dddd", "name": "Dockside Dragons", "shortName": "DOX", "logoUrl512": "https://example.com/dox.png", "commissioner": False},
 ]
 TEAM_IDS = [t["id"] for t in TEAMS]
+
+# Owner account names surfaced per team via getTeamRosterInfo's teamHeadingInfo.
+# Unlike team name/shortName these are stable across seasons.
+TEAM_OWNERS = {
+    "team1id00000aaaa": "anchor_andy",
+    "team2id00000bbbb": "bay_bobby",
+    "team3id00000cccc": "cedar_carl",
+    "team4id00000dddd": "dock_dana",
+}
 
 # Weekly scoring periods (regular season periods 1-4, playoff period 5).
 # "name" format mirrors Fantrax's "[Mon Day/YY - Mon Day/YY]" used by ScoringPeriod.
@@ -86,6 +95,13 @@ SCORING_DATES = {
 
 def _team_data_map() -> dict[str, dict]:
     return {t["id"]: dict(t) for t in TEAMS}
+
+
+def _team_info_map() -> dict[str, dict]:
+    # Standings responses carry a reduced team payload: just name/shortName/logoUrl512,
+    # notably without the commissioner flag -- League._update_teams must merge rather
+    # than downgrade the existing Team data.
+    return {t["id"]: {"name": t["name"], "shortName": t["shortName"], "logoUrl512": f"https://example.com/{t['shortName'].lower()}_512.png"} for t in TEAMS}
 
 
 # ---------------------------------------------------------------------------
@@ -489,7 +505,7 @@ def _standings_row(rank: int, team_id: str, win: int, loss: int, tie: int, point
 
 
 def _standings_table(rows: list[dict], alias_keys: bool = False) -> dict:
-    return {"header": _standings_header(alias_keys=alias_keys), "rows": rows, "fantasyTeamInfo": _team_data_map()}
+    return {"header": _standings_header(alias_keys=alias_keys), "rows": rows}
 
 
 def _standings_tabs() -> list[dict]:
@@ -532,6 +548,7 @@ def build_standings_regular_season() -> dict:
     return {
         "displayedSelections": {"view": "REGULAR_SEASON"},
         "displayedLists": {"tabs": _standings_tabs()},
+        "fantasyTeamInfo": _team_info_map(),
         "tableList": [
             _standings_table(
                 [
@@ -563,7 +580,7 @@ def build_standings_by_period(period_number: int) -> dict:
             _standings_row(4, t4, 1, 2, 0, 2, "0.333", "2", "175.0", "215.0", "W1"),
         ],
     }
-    return {"tableList": [_standings_table(base[period_number])]}
+    return {"fantasyTeamInfo": _team_info_map(), "tableList": [_standings_table(base[period_number])]}
 
 
 def build_standings_only_period(period_number: int) -> dict:
@@ -576,7 +593,7 @@ def build_standings_only_period(period_number: int) -> dict:
             _standings_row(4, t4, 0, 1, 0, 0, "0.000", "1", "70.0", "70.0", "L1"),
         ]
     }
-    return {"tableList": [_standings_table(rows[period_number])]}
+    return {"fantasyTeamInfo": _team_info_map(), "tableList": [_standings_table(rows[period_number])]}
 
 
 # ---------------------------------------------------------------------------
@@ -666,7 +683,7 @@ def build_trade_blocks() -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
-def build_position_counts(scoring_period_number: int | None) -> dict:
+def build_position_counts(scoring_period_number: int | None, team_id: str | None = None) -> dict:
     if scoring_period_number == 2:
         table = [
             {"pos": "Center", "posShort": "C", "min": "-", "max": 3, "gp": "5"},
@@ -681,7 +698,11 @@ def build_position_counts(scoring_period_number: int | None) -> dict:
             {"pos": "Defense", "posShort": "D", "min": "-", "max": "-", "gp": "19"},
             {"pos": "Team Goalie", "posShort": "TmG", "min": 1, "max": 7, "gp": "8"},
         ]
-    return {"gamePlayedPerPosData": {"tableData": table}, "fantasyTeams": _team_data_map()}
+    return {
+        "gamePlayedPerPosData": {"tableData": table},
+        "fantasyTeams": _team_data_map(),
+        "teamHeadingInfo": {"owners": {"owners": "Owner(s)", "shortName": "Own", "value": TEAM_OWNERS.get(team_id, "")}},
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -922,7 +943,7 @@ class MockSession:
             if view == "GAMES_PER_POS":
                 if "teamId" in data:
                     period = int(data["scoringPeriod"]) if "scoringPeriod" in data else None
-                    return build_position_counts(period)
+                    return build_position_counts(period, team_id=data["teamId"])
                 return build_team_roster_info_games_per_pos()
             if view == "STATS":
                 if "teamId" in data:

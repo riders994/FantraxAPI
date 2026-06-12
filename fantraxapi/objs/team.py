@@ -13,11 +13,19 @@ if TYPE_CHECKING:
 class Team(FantraxBaseObject):
     """Represents a single Team.
 
+    Each season is a separate Fantrax league with brand-new team IDs, and owners can
+    rename their team (name and short) at any time, so none of those identify a team
+    across seasons. Use owners for that; logo can corroborate (custom-uploaded logos
+    persist across seasons, while stock logos are shared between teams).
+
     Attributes:
         league (League): The League instance this object belongs to.
         id (str): Team ID.
         name (str): Team Name.
         short (str): Team Short Name.
+        logo (str): Team Logo URL.
+        commissioner (bool): Is the Team owned by a League commissioner? Not every data source reports this; it defaults to False.
+        owners (str): Owner account name(s). Fetched lazily with one request on first access, then cached.
 
     """
 
@@ -26,12 +34,27 @@ class Team(FantraxBaseObject):
         self.id: str = team_id
         self.name: str = self._data["name"]
         self.short: str = self._data["shortName"]
+        self.commissioner: bool = self._data.get("commissioner", False)
+        self._owners: str | None = None
         if "logoUrl512" in self._data:
             self.logo: str = self._data["logoUrl512"]
         elif "logoUrl256" in self._data:
             self.logo: str = self._data["logoUrl256"]
         else:
             self.logo: str = self._data["logoUrl128"]
+
+    @property
+    def owners(self) -> str:
+        if self._owners is None:
+            from fantraxapi import api
+
+            response = api.get_team_roster_position_counts(self.league, self.id)
+            self._owners = response["teamHeadingInfo"]["owners"]["value"]
+            # that request rebuilt league.teams; share the cache with the new instance
+            current = self.league.team_lookup.get(self.id)
+            if current is not None:
+                current._owners = self._owners
+        return self._owners
 
     def __str__(self) -> str:
         return self.name
