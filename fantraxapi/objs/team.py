@@ -25,7 +25,7 @@ class Team(FantraxBaseObject):
         short (str): Team Short Name.
         logo (str): Team Logo URL.
         commissioner (bool): Is the Team owned by a League commissioner? Not every data source reports this; it defaults to False.
-        owners (str): Owner account name(s). Fetched lazily with one request on first access, then cached.
+        owners (str): Owner account name(s). Fetched lazily with one request on first access, then cached. Empty for placeholder teams (e.g. the Bye slot in an odd-sized playoff bracket), which aren't league members.
 
     """
 
@@ -46,6 +46,10 @@ class Team(FantraxBaseObject):
     @property
     def owners(self) -> str:
         if self._owners is None:
+            if self.id not in self.league.team_lookup:
+                # Placeholder teams (e.g. a bracket's Bye slot) have no roster page to ask
+                self._owners = ""
+                return self._owners
             from fantraxapi import api
 
             response = api.get_team_roster_position_counts(self.league, self.id)

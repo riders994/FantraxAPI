@@ -293,6 +293,17 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         # composite_key works against the placeholder Team just like a real one
         self.assertEqual(consolation_matchup.composite_key, f"bye_{consolation_matchup.away.id}")
 
+    def test_bye_placeholder_team_owners(self) -> None:
+        # The Bye placeholder H2HRotisserie2 fabricates for an empty bracket slot
+        # isn't a league member; owners must come back empty without issuing the
+        # roster request (live, that request errors out).
+        results = self.league.scoring_period_results(season=False, playoffs=True)
+        bye_team = results[5].other_brackets["Consolation"]["9201"].home
+        self.assertEqual(bye_team.name, "Bye")
+        calls = len(self.league.session.post_calls)
+        self.assertEqual(bye_team.owners, "")
+        self.assertEqual(len(self.league.session.post_calls), calls)
+
     def test_playoff_round_number_does_not_overwrite_season_week(self) -> None:
         # The rotisserie playoff fixture is captioned "Scoring Period: Playoffs 1"
         # (the style real NBA leagues use). The round number used to be parsed as a
