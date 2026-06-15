@@ -1,12 +1,11 @@
 from __future__ import annotations
 
-import re
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Self
 
-from fantraxapi import NotTeamInLeague
-
+from ..exceptions import NotTeamInLeague
+from ._parse import parse_date_range, parse_decimal, parse_float, period_number
 from .base import FantraxBaseObject
 from .team import Team
 
@@ -28,9 +27,9 @@ class ScoringPeriod(FantraxBaseObject):
 
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
-        dates = self._data["name"][1:-1].split(" - ")
-        self.start: date = datetime.strptime(dates[0], "%b %d/%y").date()
-        self.end: date = datetime.strptime(dates[1], "%b %d/%y").date()
+        self.start: date
+        self.end: date
+        self.start, self.end = parse_date_range(self._data["name"], "%b %d/%y")
         self.number: int = self._data["value"]
 
     @property
@@ -45,6 +44,12 @@ class ScoringPeriod(FantraxBaseObject):
         elif isinstance(other, str) and other.isnumeric():
             return self.number == int(other)
         return False
+
+    def __hash__(self) -> int:
+        # __eq__ treats a ScoringPeriod as equal to its bare period number (int or
+        # numeric str), so the hash must match hash(number) to keep the eq/hash
+        # invariant. Deliberately NOT prefixed with the class name for that reason.
+        return hash(self.number)
 
     def __str__(self) -> str:
         return f"[{self.number}:{self.range}]"
@@ -85,14 +90,14 @@ class ScoringPeriodResult(FantraxBaseObject):
         # Caption styles vary by league ("Playoffs - Round 1", "Scoring Period: Playoffs 1"),
         # so callers that know the table came from a playoff view should pass playoffs explicitly.
         self.playoffs: bool = "Playoffs" in self.name if playoffs is None else playoffs
-        dates = self._data["subCaption"][1:-1].split(" - ")
-        self.start: date = datetime.strptime(dates[0], "%a %b %d, %Y").date()
-        self.end: date = datetime.strptime(dates[1], "%a %b %d, %Y").date()
+        self.start: date
+        self.end: date
+        self.start, self.end = parse_date_range(self._data["subCaption"], "%a %b %d, %Y")
 
         if self.playoffs:
             self.period: ScoringPeriod = self.league.scoring_periods_lookup[self.range]
         else:
-            self.period: ScoringPeriod = self.league.scoring_periods[int(re.search(r"(\d+)$", self.name).group())]
+            self.period: ScoringPeriod = self.league.scoring_periods[period_number(self.name)]
 
         self.next: date = self.end + timedelta(days=1)
         self.days: int = (self.next - self.start).days
@@ -172,12 +177,12 @@ class Matchup(FantraxBaseObject):
             self.away: Team | str = self.league.team(self._data[0]["teamId"])
         except NotTeamInLeague:
             self.away: Team | str = self._data[0]["content"]
-        self._away_score: Decimal = Decimal(str(self._data[1]["content"]).replace(",", ""))
+        self._away_score: Decimal = parse_decimal(self._data[1]["content"])
         try:
             self.home: Team | str = self.league.team(self._data[2]["teamId"])
         except NotTeamInLeague:
             self.home: Team | str = self._data[2]["content"]
-        self._home_score: Decimal = Decimal(str(self._data[3]["content"]).replace(",", ""))
+        self._home_score: Decimal = parse_decimal(self._data[3]["content"])
 
     @property
     def away_score(self) -> float:
@@ -259,19 +264,11 @@ class H2HRotisserie2(Matchup):
     def _scoreboard_builder(self, home_cells, away_cells, headers):
         for i, category in enumerate(headers):
             if home_cells[i].get('toolTip'):
-                h = home_cells[i].get('toolTip')
-                a = away_cells[i].get('toolTip')
+                h = parse_float(home_cells[i].get('toolTip'))
+                a = parse_float(away_cells[i].get('toolTip'))
             else:
-                h = home_cells[i]['content']
-                a = away_cells[i]['content']
-            try:
-                h = float(str(h).replace(',', ''))
-            except ValueError:
-                h = 0.0
-            try:
-                a = float(str(a).replace(',', ''))
-            except ValueError:
-                a = 0.0
+                h = parse_float(home_cells[i]['content'])
+                a = parse_float(away_cells[i]['content'])
 
             self.scoring_grid.update({
                 category: {

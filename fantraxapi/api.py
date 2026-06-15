@@ -4,8 +4,7 @@ from typing import TYPE_CHECKING, ParamSpec
 
 from requests import Session
 
-from fantraxapi import FantraxException
-from fantraxapi.exceptions import NotLoggedIn, NotMemberOfLeague
+from fantraxapi.exceptions import FantraxException, NotLoggedIn, NotMemberOfLeague
 
 if TYPE_CHECKING:
     from fantraxapi.objs import League

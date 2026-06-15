@@ -50,7 +50,7 @@ class Team(FantraxBaseObject):
                 # Placeholder teams (e.g. a bracket's Bye slot) have no roster page to ask
                 self._owners = ""
                 return self._owners
-            from fantraxapi import api
+            from .. import api
 
             response = api.get_team_roster_position_counts(self.league, self.id)
             self._owners = response["teamHeadingInfo"]["owners"]["value"]

@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+from ._parse import parse_float
 from .base import FantraxBaseObject
 from .team import Team
 
@@ -71,15 +72,11 @@ class Record(FantraxBaseObject):
         self.loss: int = int(content("loss") or 0)
         self.tie: int = int(content("tie") or 0)
         self.points: int = int(content("points") or 0)
-        winpc_raw = content("winpc")
-        self.win_percentage: float = float(winpc_raw) if winpc_raw and winpc_raw != "-" else 0.0
-        gb_raw = content("gamesback", "gb")
-        self.games_back: float = float(gb_raw) if gb_raw and gb_raw != "-" else 0.0
+        self.win_percentage: float = parse_float(content("winpc"))
+        self.games_back: float = parse_float(content("gamesback", "gb"))
         self.wavier_wire_order: int = int(content("wwOrder") or 0)
-        pf_raw = content("pointsFor", "cpf")
-        self.points_for: float = float(pf_raw.replace(",", "")) if pf_raw else 0.0
-        pa_raw = content("pointsAgainst", "cpa")
-        self.points_against: float = float(pa_raw.replace(",", "")) if pa_raw else 0.0
+        self.points_for: float = parse_float(content("pointsFor", "cpf"))
+        self.points_against: float = parse_float(content("pointsAgainst", "cpa"))
         self.streak: str = content("streak") or ""
 
     def __str__(self) -> str:

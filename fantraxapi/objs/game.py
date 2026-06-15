@@ -60,5 +60,8 @@ class Game(FantraxBaseObject):
     def __eq__(self, other: Self) -> bool:
         return self.id == other.id
 
+    def __hash__(self) -> int:
+        return hash(("Game", self.id))
+
     def __str__(self) -> str:
         return f"[{self.id}:{f'{self.opponent} @{self.player.team_short_name}' if self.home else f'{self.player.team_short_name} @{self.opponent}'}{f' {self.time}' if self.time else ''}]"

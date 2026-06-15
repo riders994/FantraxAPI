@@ -2,8 +2,7 @@ from abc import ABC, abstractmethod
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from fantraxapi.exceptions import DateNotInSeason
-
+from ..exceptions import DateNotInSeason
 from .base import FantraxBaseObject
 from .player import Player
 from .team import Team

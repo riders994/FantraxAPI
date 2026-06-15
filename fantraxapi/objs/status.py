@@ -30,5 +30,8 @@ class Status(FantraxBaseObject):
     def __eq__(self, other: Self) -> bool:
         return (self.id, self.name, self.short_name) == (other.id, other.name, other.short_name)
 
+    def __hash__(self) -> int:
+        return hash(("Status", self.id, self.name, self.short_name))
+
     def __str__(self) -> str:
         return f"[{self.id}:{self.name}]"

@@ -1,7 +1,7 @@
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from fantraxapi import League
+    from .league import League
 
 
 class FantraxBaseObject:

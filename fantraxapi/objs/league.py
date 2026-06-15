@@ -1,12 +1,17 @@
-import re
 from datetime import date, datetime
 from typing import ParamSpec
 
 from requests import Session
 
-from fantraxapi import NotLoggedIn, NotTeamInLeague, api
-
-from ..exceptions import DateNotInSeason, FantraxException, PeriodNotInSeason
+from .. import api
+from ..exceptions import (
+    DateNotInSeason,
+    FantraxException,
+    NotLoggedIn,
+    NotTeamInLeague,
+    PeriodNotInSeason,
+)
+from ._parse import period_number
 from .player import LivePlayer
 from .position import Position, PositionCount
 from .roster import Roster
@@ -19,6 +24,57 @@ from .trade_block import TradeBlock
 from .transaction import Transaction
 
 Param = ParamSpec("Param")
+
+
+def _index_playoff_brackets(bracket_responses: list[dict]) -> dict[int, list[tuple[str | None, dict]]]:
+    """Map playoff period number to its secondary bracket tables.
+
+    Returns a dict of ``period_number -> [(bracket_name, table), ...]`` built
+    from the non-primary playoff standings views.
+    """
+    other_data: dict[int, list[tuple[str | None, dict]]] = {}
+    for bracket_response in bracket_responses:
+        other_id = bracket_response["displayedSelections"]["view"]
+        name = next((tab["name"] for tab in bracket_response["displayedLists"]["tabs"] if tab["id"] == other_id), None)
+        for obj in bracket_response["tableList"]:
+            if obj["caption"] == "Standings":
+                continue
+            other_data.setdefault(period_number(obj["caption"]), []).append((name, obj))
+    return other_data
+
+
+def _group_transaction_rows(rows: list[dict]) -> list[list[dict]]:
+    """Group consecutive transaction rows that share a ``txSetId``."""
+    groups: list[list[dict]] = []
+    current: list[dict] = []
+    for row in rows:
+        if current and row["txSetId"] != current[0]["txSetId"]:
+            groups.append(current)
+            current = []
+        current.append(row)
+    if current:
+        groups.append(current)
+    return groups
+
+
+def _build_scorer_map(response: dict) -> dict[str, dict]:
+    """Flatten the nested ``scorerMap`` structure into ``{scorerId: scorer}``."""
+    scorer_map: dict[str, dict] = {}
+    for by_team in response["scorerMap"].values():
+        for by_status in by_team.values():
+            for players in by_status.values():
+                for player in players:
+                    scorer = player["scorer"]
+                    scorer_map.setdefault(scorer["scorerId"], scorer)
+    return scorer_map
+
+
+def _active_team_ids(response: dict) -> set[str]:
+    """Return the set of team IDs taking part in a live matchup."""
+    active: set[str] = set()
+    for matchup in response["matchups"]:
+        active.update(matchup.split("_"))
+    return active
 
 
 class League:
@@ -152,24 +208,11 @@ class League:
 
         if playoffs:
             playoff_responses = api.get_standings(self, views=["PLAYOFFS"] + [tab["id"] for tab in response["displayedLists"]["tabs"] if tab["id"].startswith(".")])
-
-            other_data = {}
-            for bracket_response in playoff_responses[1:]:
-                other_id = bracket_response["displayedSelections"]["view"]
-                name = next((tab["name"] for tab in bracket_response["displayedLists"]["tabs"] if tab["id"] == other_id), None)
-                for obj in bracket_response["tableList"]:
-                    if obj["caption"] == "Standings":
-                        continue
-                    playoff_number = int(re.search(r"(\d+)$", obj["caption"]).group())
-                    if playoff_number not in other_data:
-                        other_data[playoff_number] = []
-                    other_data[playoff_number].append((name, obj))
-
+            other_data = _index_playoff_brackets(playoff_responses[1:])
             for obj in reversed(playoff_responses[0]["tableList"]):
                 if obj["caption"] == "Standings":
                     continue
-                playoff_number = int(re.search(r"(\d+)$", obj["caption"]).group())
-                scoring_period = ScoringPeriodResult(self, obj, other_data=other_data[playoff_number] if playoff_number in other_data else None, playoffs=True)
+                scoring_period = ScoringPeriodResult(self, obj, other_data=other_data.get(period_number(obj["caption"])), playoffs=True)
                 periods[scoring_period.period.number] = scoring_period
 
         return periods
@@ -261,16 +304,7 @@ class League:
 
         """
         response = api.get_transaction_history(self, per_page_results=count)
-        transactions = []
-        transaction_data = []
-        for row in response["table"]["rows"]:
-            if transaction_data and row["txSetId"] != transaction_data[0]["txSetId"]:
-                transactions.append(Transaction(self, transaction_data))
-                transaction_data = []
-            transaction_data.append(row)
-        if transaction_data:
-            transactions.append(Transaction(self, transaction_data))
-        return transactions
+        return [Transaction(self, rows) for rows in _group_transaction_rows(response["table"]["rows"])]
 
     def position_counts(self, team_id: str, scoring_period_number: int | None = None) -> dict[str, PositionCount]:
         """Returns a Dictionary of PositionCount objects that represents the positions used for a given Team ID for a specific period or the latest period's standings when scoring_period_number is None.
@@ -307,28 +341,16 @@ class League:
         if scoring_date not in self.scoring_dates.values():
             raise DateNotInSeason(scoring_date)
         response = api.get_live_scoring_stats(self, scoring_date=scoring_date)
-        scorer_map = {}
-        for _, data in response["scorerMap"].items():
-            for _, data2 in data.items():
-                for _, data3 in data2.items():
-                    for player in data3:
-                        if player["scorer"]["scorerId"] not in scorer_map:
-                            scorer_map[player["scorer"]["scorerId"]] = player["scorer"]
-        active_teams = []
-        for matchup in response["matchups"]:
-            team1, team2 = matchup.split("_")
-            active_teams.append(team1)
-            active_teams.append(team2)
-        final_scores = {}
+        scorer_map = _build_scorer_map(response)
+        active_teams = _active_team_ids(response)
+        final_scores: dict[str, list[LivePlayer]] = {}
         for team_id, data in response["statsPerTeam"]["allTeamsStats"].items():
             if team_id not in active_teams:
                 continue
-            if team_id not in final_scores:
-                final_scores[team_id] = []
+            players = final_scores.setdefault(team_id, [])
             for scorer_id, pts in data["ACTIVE"]["statsMap"].items():
                 if not scorer_id.startswith("_"):
-                    player_data = scorer_map[scorer_id]
-                    final_scores[team_id].append(LivePlayer(self, player_data, team_id, pts["object1"], scoring_date))
+                    players.append(LivePlayer(self, scorer_map[scorer_id], team_id, pts["object1"], scoring_date))
         return final_scores
 
     def team_roster(self, team_id: str, period_number: int | None = None) -> Roster:
