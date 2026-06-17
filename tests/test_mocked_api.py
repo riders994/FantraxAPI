@@ -750,6 +750,18 @@ class TeamRosterTests(unittest.TestCase):
         team = self.league.team(TEAM_IDS[0])
         self.assertRaises(PeriodNotInSeason, team.roster, 12345)
 
+    def test_doubleheader_future_game(self) -> None:
+        # A doubleheader is one Game on a date with two start times (baseball); the
+        # opponent/weekday parse despite the weekday sitting in the first content part.
+        roster = self.league.team(TEAM_IDS[0]).roster(22)
+        defense_row = roster.rows[2]
+        game = defense_row.future_games[_FUTURE_GAME_LABEL]
+        self.assertEqual(game.opponent, "BOS")
+        self.assertEqual(len(game.times), 2)
+        self.assertEqual([t.strftime("%I:%M%p") for t in game.times], ["01:35PM", "07:10PM"])
+        # `time` is the first start time
+        self.assertEqual(game.time, game.times[0])
+
 
 class PlayerFlagsTests(unittest.TestCase):
     @classmethod
