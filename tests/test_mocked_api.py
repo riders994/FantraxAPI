@@ -717,6 +717,22 @@ class TeamRosterTests(unittest.TestCase):
         self.assertEqual(roster.injured, 1)
         self.assertEqual(roster.injured_max, 3)
 
+        # age (universal across sports) is captured; non-salary league -> no salary cap
+        # or per-player salary/contract, but draft picks are still reported.
+        self.assertEqual(roster.rows[0].age, 26)
+        self.assertIsNone(roster.rows[0].salary)
+        self.assertIsNone(roster.rows[0].contract_year)
+        self.assertIsNone(roster.salary)
+        self.assertEqual(roster.cap_hit_penalties, [])
+        self.assertIsNone(team.salary_cap)
+        self.assertEqual(len(roster.draft_picks), 3)
+        self.assertEqual(roster.draft_picks[0].year, 2026)
+        self.assertEqual(roster.draft_picks[0].round, 1)
+        self.assertEqual(roster.draft_picks[0].original_owner.name, "Anchorage Avalanche")
+        # a traded pick records a different original owner
+        self.assertEqual(roster.draft_picks[1].original_owner.name, "Bayview Bandits")
+        self.assertEqual(str(roster.draft_picks[1]), "2026 Round 2")
+
         center_row = roster.rows[0]
         self.assertEqual(str(center_row.position), "[206:Center:C]")
         self.assertEqual(str(center_row.player), "Connor Centerman")
@@ -761,6 +777,53 @@ class TeamRosterTests(unittest.TestCase):
         self.assertEqual([t.strftime("%I:%M%p") for t in game.times], ["01:35PM", "07:10PM"])
         # `time` is the first start time
         self.assertEqual(game.time, game.times[0])
+
+
+class SalaryCapTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.league = League(LEAGUE_ID, session=new_mock_session(salary=True))
+
+    def test_player_salary_and_contract(self) -> None:
+        roster = self.league.team(TEAM_IDS[0]).roster(22)
+        center = roster.rows[0]
+        self.assertEqual(center.salary, 26.0)
+        self.assertEqual(center.contract_year, "2026")
+        self.assertEqual(center.age, 26)
+        wing = roster.rows[1]
+        self.assertEqual(wing.salary, 67.0)
+        self.assertEqual(wing.contract_year, "2027")
+        # an empty slot carries no salary/contract
+        self.assertIsNone(roster.rows[3].salary)
+        self.assertIsNone(roster.rows[3].contract_year)
+
+    def test_roster_salary_cap_info(self) -> None:
+        salary = self.league.team(TEAM_IDS[0]).roster(22).salary
+        self.assertIsNotNone(salary)
+        self.assertEqual(salary.cap, 2000.0)
+        self.assertEqual(salary.used, 1951.0)
+        self.assertEqual(salary.remaining, 49.0)
+        self.assertEqual(salary.floor, 1250.0)
+        # claim budget arrives as a comma string and is normalized to a float
+        self.assertEqual(salary.claim_budget, 1604.0)
+
+    def test_team_salary_cap_passthrough(self) -> None:
+        team = self.league.team(TEAM_IDS[1])
+        self.assertEqual(team.salary_cap, 2000.0)
+        # second access is served from the cache (no extra roster request)
+        calls = len(self.league.session.post_calls)
+        self.assertEqual(team.salary_cap, 2000.0)
+        self.assertEqual(len(self.league.session.post_calls), calls)
+
+    def test_cap_hit_penalties(self) -> None:
+        penalties = self.league.team(TEAM_IDS[0]).roster(22).cap_hit_penalties
+        self.assertEqual(len(penalties), 1)
+        penalty = penalties[0]
+        self.assertEqual(penalty.player.name, "Owen Outerbridge")
+        self.assertEqual(penalty.amount, 0.5)
+        self.assertEqual(penalty.start_period, "1 (Mar 25/26)")
+        self.assertEqual(penalty.ending_season_year, 2027)
+        self.assertEqual(penalty.description, "Buyout penalty")
 
 
 class PlayerFlagsTests(unittest.TestCase):

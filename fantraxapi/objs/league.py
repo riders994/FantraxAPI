@@ -168,6 +168,8 @@ class League:
             team = Team(self, team_id, previous[team_id]._data | data if team_id in previous else data)
             if team_id in previous:
                 team._owners = previous[team_id]._owners
+                team._salary_cap = previous[team_id]._salary_cap
+                team._salary_cap_fetched = previous[team_id]._salary_cap_fetched
             self.teams.append(team)
         self._team_lookup = None
 

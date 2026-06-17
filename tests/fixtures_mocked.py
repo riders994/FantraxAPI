@@ -849,14 +849,25 @@ ROSTER_PERIOD_DATE = "2024-10-22"  # period 22 -> Tue, so game_today's "today" =
 _FUTURE_GAME_LABEL = "Thu 10/24"
 
 
-def _stats_header_cells() -> list[dict]:
-    return [
+def _stats_header_cells(salary: bool = False) -> list[dict]:
+    # "key"-bearing columns mirror the real roster header; salary/contract only appear
+    # in salary-cap leagues, while age is universal across sports.
+    cells = [
         {"shortName": "Pos"},
         {"shortName": "Player"},
-        {"shortName": "FPts", "sortKey": "SCORE"},
-        {"shortName": "FP/G", "sortKey": "FPTS_PER_GAME"},
+        {"shortName": "Age", "key": "age", "sortKey": "AGE"},
+    ]
+    if salary:
+        cells += [
+            {"shortName": "Sal", "key": "salary"},
+            {"shortName": "Con", "key": "contract"},
+        ]
+    cells += [
+        {"shortName": "FPts", "key": "fpts", "sortKey": "SCORE"},
+        {"shortName": "FP/G", "key": "fptsPerGame", "sortKey": "FPTS_PER_GAME"},
         {"shortName": "Today", "eventStr": True},
     ]
+    return cells
 
 
 def _schedule_header_cells() -> list[dict]:
@@ -867,17 +878,34 @@ def _schedule_header_cells() -> list[dict]:
     ]
 
 
-def _roster_stats_row(pos_id: str, scorer: dict | None, status_id: str, fpts: str | None = None, fp_per_game: str | None = None, today_content: str = "") -> dict:
+def _roster_stats_row(
+    pos_id: str,
+    scorer: dict | None,
+    status_id: str,
+    fpts: str | None = None,
+    fp_per_game: str | None = None,
+    today_content: str = "",
+    age: str = "26",
+    salary: bool = False,
+    salary_value: str = "",
+    contract: str = "",
+) -> dict:
     row = {"posId": pos_id, "statusId": status_id}
     if scorer is not None:
         row["scorer"] = scorer
-        row["cells"] = [
+        cells = [
             {"content": POSITIONS[pos_id]["shortName"]},
             {"content": scorer["name"]},
+            {"content": age},
+        ]
+        if salary:
+            cells += [{"content": salary_value}, {"content": contract}]
+        cells += [
             {"content": fpts if fpts is not None else "0.0"},
             {"content": fp_per_game if fp_per_game is not None else "0.0"},
             {"content": today_content, "eventId": f"today_{scorer['scorerId']}"} if today_content else {"content": ""},
         ]
+        row["cells"] = cells
     return row
 
 
@@ -892,29 +920,58 @@ def _roster_schedule_row(pos_id: str, scorer: dict | None, future_content: str =
     return row
 
 
-def build_team_roster_stats() -> dict:
-    return {
+def build_team_roster_stats(salary: bool = False) -> dict:
+    misc = {
+        "statusTotals": [
+            {"name": "Active", "total": "11", "max": "12"},
+            {"name": "Reserve", "total": "7", "max": "18"},
+            {"name": "Inj Res", "total": "1", "max": "3"},
+        ]
+    }
+    if salary:
+        # Mirrors miscData.salaryInfo.info[] (claimBudget arrives as a comma string).
+        misc["salaryInfo"] = {
+            "title": "Salary & Other Info",
+            "info": [
+                {"name": "Used", "value": 1951.0, "key": "salaryUsed"},
+                {"name": "Remaining", "value": 49.0, "key": "salaryRemaining"},
+                {"name": "Cap", "value": 2000.0, "key": "salaryCap"},
+                {"name": "Floor", "value": 1250.0, "key": "salaryFloor"},
+                {"name": "Claim Budget Remaining", "value": "1,604.00", "key": "claimBudget"},
+            ],
+        }
+    response = {
         "displayedSelections": {"displayedPeriod": "22"},
-        "miscData": {
-            "statusTotals": [
-                {"name": "Active", "total": "11", "max": "12"},
-                {"name": "Reserve", "total": "7", "max": "18"},
-                {"name": "Inj Res", "total": "1", "max": "3"},
+        "miscData": misc,
+        # Draft picks are reported across all sports (dynasty/keeper); the 2026 R2 pick
+        # originally belonged to a different team (a traded pick).
+        "draftPicksData": {
+            "draftPicksPerYear": [
+                {"year": 2026, "draftPickList": [{"round": 1, "origOwnerTeamId": TEAM_IDS[0]}, {"round": 2, "origOwnerTeamId": TEAM_IDS[1]}]},
+                {"year": 2027, "draftPickList": [{"round": 1, "origOwnerTeamId": TEAM_IDS[0]}]},
             ]
         },
         "tables": [
             {
-                "header": {"cells": _stats_header_cells()},
+                "header": {"cells": _stats_header_cells(salary)},
                 "rows": [
-                    _roster_stats_row("206", PLAYER_CENTER, "1", fpts="21.8", fp_per_game="3.1"),
-                    _roster_stats_row("207", PLAYER_WINGER, "1", fpts="14.7", fp_per_game="2.4", today_content="CAR<br/>Tue 7:00PM"),
-                    _roster_stats_row("204", PLAYER_DEFENSEMAN, "1", fpts="10.0", fp_per_game="1.7"),
+                    _roster_stats_row("206", PLAYER_CENTER, "1", fpts="21.8", fp_per_game="3.1", age="26", salary=salary, salary_value="26.00", contract="2026"),
+                    _roster_stats_row("207", PLAYER_WINGER, "1", fpts="14.7", fp_per_game="2.4", today_content="CAR<br/>Tue 7:00PM", age="29", salary=salary, salary_value="67.00", contract="2027"),
+                    _roster_stats_row("204", PLAYER_DEFENSEMAN, "1", fpts="10.0", fp_per_game="1.7", age="31", salary=salary, salary_value="191.00", contract="2025"),
                     _roster_stats_row("204", None, "0"),
                 ],
             }
         ],
         "fantasyTeams": _team_data_map(),
     }
+    if salary:
+        # capHitPenaltyData.tableData[]: a dead-money cap hit charged to the team.
+        response["capHitPenaltyData"] = {
+            "tableData": [
+                {"scorer": PLAYER_OUT, "salaryAmount": "$0.50", "startPeriod": "1 (Mar 25/26)", "description": "Buyout penalty", "endingSeasonYear": 2027},
+            ]
+        }
+    return response
 
 
 def build_team_roster_schedule_full() -> dict:
@@ -973,11 +1030,12 @@ class MockSession:
     including an explicit ``PLAYOFFS`` request, answers with the regular season view.
     """
 
-    def __init__(self, force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False, tx_page_cap: int | None = None) -> None:
+    def __init__(self, force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False, tx_page_cap: int | None = None, salary: bool = False) -> None:
         self.force_error = force_error
         self.rotisserie = rotisserie
         self.no_playoffs = no_playoffs
         self.tx_page_cap = tx_page_cap
+        self.salary = salary
         self.post_calls: list[dict] = []
 
     def post(self, url: str, params: dict | None = None, json: dict | None = None, **kwargs: object) -> FakeResponse:
@@ -1021,7 +1079,7 @@ class MockSession:
                 return build_team_roster_info_games_per_pos()
             if view == "STATS":
                 if "teamId" in data:
-                    return build_team_roster_stats()
+                    return build_team_roster_stats(salary=self.salary)
                 return build_team_roster_info_stats()
             if view == "SCHEDULE_FULL":
                 return build_team_roster_schedule_full()
@@ -1062,5 +1120,5 @@ class MockSession:
         return build_standings_default()
 
 
-def new_mock_session(force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False, tx_page_cap: int | None = None) -> MockSession:
-    return MockSession(force_error=force_error, rotisserie=rotisserie, no_playoffs=no_playoffs, tx_page_cap=tx_page_cap)
+def new_mock_session(force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False, tx_page_cap: int | None = None, salary: bool = False) -> MockSession:
+    return MockSession(force_error=force_error, rotisserie=rotisserie, no_playoffs=no_playoffs, tx_page_cap=tx_page_cap, salary=salary)
