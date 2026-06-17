@@ -980,7 +980,7 @@ def build_team_roster_schedule_full() -> dict:
             {
                 "header": {"cells": _schedule_header_cells()},
                 "rows": [
-                    _roster_schedule_row("206", PLAYER_CENTER, future_content="@TOR<br/>Thu 7:00PM"),
+                    _roster_schedule_row("206", PLAYER_CENTER, future_content="@MTL<br/>Thu 7:00PM"),
                     _roster_schedule_row("207", PLAYER_WINGER, future_content=""),
                     # Doubleheader: opponent + weekday in the first part, then both start times.
                     _roster_schedule_row("204", PLAYER_DEFENSEMAN, future_content="@BOS Thu<br/>1:35PM<br/>7:10PM"),

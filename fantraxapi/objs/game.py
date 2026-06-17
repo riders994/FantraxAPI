@@ -61,18 +61,21 @@ class Game(FantraxBaseObject):
                 opponent = " ".join(tokens[:-1])
             self.opponent: str = opponent
             if self.opponent.startswith("@"):
+                # "@OPP": the player's team is visiting, so the opponent is the home team.
                 self.opponent = self.opponent[1:]
-                home = self.player.team_short_name
-            else:
                 home = self.opponent
+            else:
+                # "OPP": the player's team is hosting.
+                home = self.player.team_short_name
 
             # The time is the last whitespace token of each part that carries one.
             self.times = [datetime.strptime(part.split(" ")[-1], "%I:%M%p").time() for part in parts[1:] if ":" in part]
             self.time = self.times[0] if self.times else None
         else:
-            home = "".join(i for i in parts[0] if not i.isdigit() and i not in [" ", "@"])
-            away = "".join(i for i in parts[1] if not i.isdigit() and i not in [" ", "@"])
-            self.opponent = away if home == self.player.team_short_name else home
+            # Played game "<away> <score><br/>@<home> <score>": the "@" side (parts[1]) is home.
+            away_team = "".join(i for i in parts[0] if not i.isdigit() and i not in [" ", "@"])
+            home = "".join(i for i in parts[1] if not i.isdigit() and i not in [" ", "@"])
+            self.opponent = away_team if home == self.player.team_short_name else home
         self.home: bool = home == self.player.team_short_name
         self.away: bool = home != self.player.team_short_name
 

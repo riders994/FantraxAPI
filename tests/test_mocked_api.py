@@ -741,17 +741,19 @@ class TeamRosterTests(unittest.TestCase):
         self.assertIsNone(center_row.game_today)
         self.assertIn(_FUTURE_GAME_LABEL, center_row.future_games)
         future_game = center_row.future_games[_FUTURE_GAME_LABEL]
-        self.assertTrue(future_game.home)
-        self.assertFalse(future_game.away)
-        self.assertEqual(future_game.opponent, "TOR")
-        self.assertEqual(str(future_game), f"[future_p001:TOR @TOR {future_game.time}]")
+        # "@MTL": the player's team (TOR) is visiting, so this is an away game.
+        self.assertFalse(future_game.home)
+        self.assertTrue(future_game.away)
+        self.assertEqual(future_game.opponent, "MTL")
+        self.assertEqual(str(future_game), f"[future_p001:TOR @MTL {future_game.time}]")
 
         wing_row = roster.rows[1]
         self.assertEqual(str(wing_row.player), "Wendell Wingfield")
         self.assertEqual(wing_row.total_fantasy_points, 14.7)
         self.assertIsNotNone(wing_row.game_today)
-        self.assertFalse(wing_row.game_today.home)
-        self.assertTrue(wing_row.game_today.away)
+        # "CAR" (no @): the player's team (BOS) is hosting, so this is a home game.
+        self.assertTrue(wing_row.game_today.home)
+        self.assertFalse(wing_row.game_today.away)
         self.assertEqual(wing_row.game_today.opponent, "CAR")
         self.assertEqual(wing_row.game_today.id, "today_p002")
         self.assertEqual(wing_row.future_games, {})
@@ -777,6 +779,18 @@ class TeamRosterTests(unittest.TestCase):
         self.assertEqual([t.strftime("%I:%M%p") for t in game.times], ["01:35PM", "07:10PM"])
         # `time` is the first start time
         self.assertEqual(game.time, game.times[0])
+
+    def test_played_game_home_away(self) -> None:
+        # A played game reads "<away> <score><br/>@<home> <score> F"; the "@" side is home.
+        player = Player(self.league, PLAYER_CENTER)  # team short name "TOR"
+        away = Game(self.league, player, _FUTURE_GAME_LABEL, {"eventId": "g1", "content": "TOR 3<br/>@BOS 5 F"})
+        self.assertEqual(away.opponent, "BOS")
+        self.assertTrue(away.away)
+        self.assertFalse(away.home)
+        home = Game(self.league, player, _FUTURE_GAME_LABEL, {"eventId": "g2", "content": "BOS 3<br/>@TOR 5 F"})
+        self.assertEqual(home.opponent, "BOS")
+        self.assertTrue(home.home)
+        self.assertFalse(home.away)
 
 
 class SalaryCapTests(unittest.TestCase):
