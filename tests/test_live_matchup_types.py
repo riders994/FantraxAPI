@@ -17,7 +17,7 @@ import unittest
 from dotenv import load_dotenv
 
 from fantraxapi import League
-from fantraxapi.objs.scoring_period import H2HRotisserie2, H2hPointsBased3
+from fantraxapi.objs.scoring_period import H2hPointsBased3, H2HRotisserie2
 
 load_dotenv()
 

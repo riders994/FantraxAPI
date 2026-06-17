@@ -11,11 +11,10 @@ Run with: pytest tests/test_mocked_api.py -v
 """
 
 import unittest
-from datetime import date
+from datetime import date, datetime
 
 from fixtures_mocked import (
     _FUTURE_GAME_LABEL,
-    _matchup_cells,
     LEAGUE_ID,
     LEAGUE_NAME,
     LEAGUE_YEAR,
@@ -28,6 +27,7 @@ from fixtures_mocked import (
     SEASON_END,
     SEASON_START,
     TEAM_IDS,
+    _matchup_cells,
     draft_pick_move,
     new_mock_session,
     player_move,
@@ -38,7 +38,8 @@ from fantraxapi import League, NotLoggedIn, NotTeamInLeague
 from fantraxapi.api import _request
 from fantraxapi.exceptions import DateNotInSeason, FantraxException, NotMemberOfLeague, PeriodNotInSeason
 from fantraxapi.objs import Player, Trade
-from fantraxapi.objs.scoring_period import H2HRotisserie2, Matchup
+from fantraxapi.objs.game import Game
+from fantraxapi.objs.scoring_period import H2hPointsBased3, H2HRotisserie2, Matchup
 
 
 def make_league(force_error: str | None = None) -> League:
@@ -74,9 +75,11 @@ class LeagueInfoTests(unittest.TestCase):
         self.assertNotIn("5", self.league.status)
 
     def test_scoring_dates(self) -> None:
-        self.assertEqual(len(self.league.scoring_dates), 5)
+        self.assertEqual(len(self.league.scoring_dates), 6)
         self.assertEqual(self.league.scoring_dates[21], date(2024, 10, 21))
         self.assertEqual(self.league.scoring_dates[28], date(2024, 10, 28))
+        # Single-digit day: Fantrax renders the periodList key as "Nov 9" (unpadded).
+        self.assertEqual(self.league.scoring_dates[9], date(2024, 11, 9))
         self.assertIn(date(2024, 10, 14), self.league.scoring_dates.values())
         self.assertNotIn(date(2024, 10, 20), self.league.scoring_dates.values())
 
@@ -179,11 +182,11 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(str(tied), "Period 2 None (None) vs None (None)")
 
     def test_composite_key_falls_back_to_raw_content_for_unresolved_teams(self) -> None:
-        # When a row's teamId doesn't match a league member, Matchup.away/home
-        # fall back to the raw "content" string rather than a Team instance --
-        # composite_key needs to handle that side too.
+        # When a row's teamId doesn't match a league member, away/home fall back to the
+        # raw "content" string rather than a Team instance (the pre-paired-cell parsing
+        # lives on H2hPointsBased3) -- composite_key, on the base, must handle that side too.
         results = self.league.scoring_period_results(playoffs=False)
-        matchup = Matchup(
+        matchup = H2hPointsBased3(
             results[1],
             "ghost",
             [
@@ -196,6 +199,8 @@ class ScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(matchup.away, "Ghost A")
         self.assertEqual(matchup.home, "Ghost B")
         self.assertEqual(matchup.composite_key, "Ghost B_Ghost A")
+        # difference() works even when both sides are raw strings (no Team).
+        self.assertEqual(matchup.difference(), 5.0)
 
     def test_playoffs_with_other_brackets(self) -> None:
         results = self.league.scoring_period_results(season=False, playoffs=True)
@@ -259,6 +264,15 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         # The "Pts" category is what drives home_score/away_score
         self.assertEqual(matchup.scoring_grid["Pts"], {matchup.home.id: 1.5, matchup.away.id: 2.5})
         self.assertEqual(matchup.composite_key, f"{matchup.home.id}_{matchup.away.id}")
+        # Per-category win/loss (gainColor) is captured, not discarded.
+        self.assertEqual(matchup.category_winners["G"], matchup.away.id)
+        self.assertEqual(matchup.category_winners["A"], matchup.home.id)
+        self.assertEqual(matchup.category_winners["PIM"], matchup.away.id)
+        self.assertIsNone(matchup.category_winners["Pts"])
+        # winner()/difference() (shared on the base) work off the public scores, so
+        # they apply to rotisserie too -- difference() no longer needs Decimal internals.
+        self.assertEqual(matchup.winner()[0].name, "Anchorage Avalanche")
+        self.assertEqual(matchup.difference(), 1.0)
 
     def test_h2h_rotisserie_second_matchup(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
@@ -269,12 +283,16 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(matchup.away_score, 3.0)
         self.assertEqual(matchup.home_score, 1.0)
         self.assertEqual(matchup.scoring_grid["PIM"], {matchup.home.id: 22.0, matchup.away.id: 12.0})
+        # No gainColor on this matchup -> every category winner is None.
+        self.assertTrue(all(v is None for v in matchup.category_winners.values()))
 
-    def test_unrecognized_table_type_falls_back_to_base_matchup(self) -> None:
+    def test_unrecognized_table_type_falls_back_to_points_based_matchup(self) -> None:
         results = self.league.scoring_period_results(playoffs=False)
         self.assertEqual(results[2].matchup_type, MATCHUP_TABLE_TYPE_UNKNOWN)
         matchup = results[2].matchups["1"]
-        self.assertIs(type(matchup), Matchup)
+        # Unknown table types parse as the pre-paired points-based shape.
+        self.assertIs(type(matchup), H2hPointsBased3)
+        self.assertIsInstance(matchup, Matchup)
         self.assertEqual(matchup.away.name, "Anchorage Avalanche")
         self.assertEqual(matchup.away_score, 110.5)
 
@@ -438,6 +456,23 @@ class TradeTests(unittest.TestCase):
             ),
         )
 
+    def test_winter_trade_time_uses_est(self) -> None:
+        # Eastern flips to EST in winter; the parser must not assume the EDT token.
+        # Jan 15 only falls in-season for the end year (2025), so it resolves there.
+        t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
+        trade = Trade(
+            self.league,
+            trade_data(
+                "tradeset_est",
+                t1,
+                "Jan 15, 8:00 PM EST",
+                "Jan 15, 8:00 PM EST",
+                "Jan 15, 8:00 PM EST",
+                [player_move(t2, t1, PLAYER_CENTER, 1.0, 1.0)],
+            ),
+        )
+        self.assertEqual(trade.proposed, datetime(2025, 1, 15, 20, 0))
+
     def test_parse_datetime_out_of_season_raises(self) -> None:
         t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
         bad_trade_dict = trade_data(
@@ -449,6 +484,12 @@ class TradeTests(unittest.TestCase):
             [player_move(t2, t1, PLAYER_CENTER, 1.0, 1.0)],
         )
         self.assertRaises(DateNotInSeason, Trade, self.league, bad_trade_dict)
+
+    def test_game_leap_day_does_not_crash(self) -> None:
+        # Feb 29 is invalid in a non-leap candidate year; the date parser must skip the
+        # bad year gracefully (DateNotInSeason) instead of raising ValueError mid-parse.
+        player = Player(self.league, PLAYER_CENTER)
+        self.assertRaises(DateNotInSeason, Game, self.league, player, "Thu 02/29", {"eventId": "g1", "content": "x"})
 
     def test_pending_trades_via_league(self) -> None:
         league = make_league()
@@ -522,25 +563,53 @@ class TransactionTests(unittest.TestCase):
         first = transactions[0]
         self.assertEqual(first.id, "txset_a")
         self.assertEqual(first.team.name, "Anchorage Avalanche")
+        self.assertEqual(first.period, 1)
+        self.assertTrue(first.executed)
         self.assertEqual(len(first.players), 2)
         self.assertEqual(first.players[0].type, "WW")
         self.assertEqual(first.players[0].name, "Henry Healthy")
+        self.assertEqual(first.players[0].result, "Executed")
+        self.assertTrue(first.players[0].executed)
         self.assertEqual(first.players[1].type, "DROP")
         self.assertEqual(first.players[1].name, "Owen Outerbridge")
         self.assertEqual(str(first.players[0]), "WW Henry Healthy")
         self.assertIn("Henry Healthy", str(first))
 
+        # A waiver claim that was cancelled: data the parser used to throw away.
         second = transactions[1]
         self.assertEqual(len(second.players), 1)
-        self.assertEqual(second.players[0].type, "DROP")
+        self.assertEqual(second.players[0].type, "WW")
         self.assertEqual(second.players[0].name, "Sam Suspendo")
+        self.assertEqual(second.period, 2)
+        self.assertFalse(second.executed)
+        self.assertFalse(second.players[0].executed)
+        self.assertEqual(second.players[0].result, "Cancelled")
 
         third = transactions[2]
         self.assertEqual(len(third.players), 2)
         self.assertEqual(third.players[0].type, "FA")
         self.assertEqual(third.players[0].name, "Connor Centerman")
+        self.assertEqual(third.players[0].transaction_type, "Claim")
         self.assertEqual(third.players[1].type, "DROP")
         self.assertEqual(third.players[1].name, "Ivan Ironside")
+
+    def test_transactions_paginate_and_stitch_across_pages(self) -> None:
+        # Server caps each page at 2 rows, so the 5 rows arrive over 3 pages and
+        # txset_c (its two rows) straddles a page boundary -- it must still group as one.
+        session = new_mock_session(tx_page_cap=2)
+        league = League(LEAGUE_ID, session=session)
+        transactions = league.transactions(count=10)
+        self.assertEqual([t.id for t in transactions], ["txset_a", "txset_b", "txset_c"])
+        self.assertEqual(len(transactions[2].players), 2)
+
+        tx_pages = [c["json"]["msgs"][0]["data"] for c in session.post_calls if c["json"]["msgs"][0]["method"] == "getTransactionDetailsHistory"]
+        self.assertGreater(len(tx_pages), 1)
+        self.assertEqual([p["pageNumber"] for p in tx_pages], ["1", "2", "3"])
+
+    def test_transactions_count_limits_results(self) -> None:
+        league = League(LEAGUE_ID, session=new_mock_session(tx_page_cap=2))
+        transactions = league.transactions(count=2)
+        self.assertEqual([t.id for t in transactions], ["txset_a", "txset_b"])
 
 
 class PositionCountTests(unittest.TestCase):
@@ -593,6 +662,23 @@ class LiveScoresTests(unittest.TestCase):
         scores2 = team2.live_scores(date(2024, 10, 21))
         self.assertEqual(scores2[0].name, "Wendell Wingfield")
         self.assertEqual(scores2[0].points, 7.0)
+
+    def test_live_scores_category_breakdown(self) -> None:
+        team = self.league.team(TEAM_IDS[0])
+        center = team.live_scores(date(2024, 10, 21))[0]
+        # Per-category scoring (object2) is captured and labelled, not discarded.
+        self.assertEqual(set(center.categories), {"G", "A", "PIM"})
+        self.assertEqual(center.categories["G"].name, "Goals")
+        self.assertEqual(center.categories["G"].value, 2.0)
+        self.assertEqual(center.categories["G"].fantasy_points, 12.0)
+        # Negative contributions are preserved.
+        self.assertEqual(center.categories["PIM"].fantasy_points, -3.5)
+        # Category fantasy points reconcile to the player's total.
+        self.assertAlmostEqual(sum(c.fantasy_points for c in center.categories.values()), center.points)
+
+        # A scorer without an object2 breakdown simply has no categories.
+        winger = self.league.team(TEAM_IDS[1]).live_scores(date(2024, 10, 21))[0]
+        self.assertEqual(winger.categories, {})
 
         # Team 3 is not part of the active matchup on this date -> no entry
         self.assertNotIn(TEAM_IDS[2], self.league.live_scores(date(2024, 10, 21)))

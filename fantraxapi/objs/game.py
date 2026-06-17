@@ -28,15 +28,21 @@ class Game(FantraxBaseObject):
         super().__init__(league, data)
         self.id: str = self._data["eventId"]
         self.player: Player = player
-        start = datetime.strptime(f"{game_date} {self.league.start_date.year}", "%a %m/%d %Y").date()
-        end = datetime.strptime(f"{game_date} {self.league.end_date.year}", "%a %m/%d %Y").date()
         league_start = self.league.start_date.date()
         league_end = self.league.end_date.date()
-        if league_end >= start >= league_start:
-            self.date: date = start
-        elif league_end >= end >= league_start:
-            self.date: date = end
-        else:
+        # The game date carries no year; seasons span a year boundary, so try the start
+        # year then the end year. Parsing is wrapped because a date like Feb 29 raises
+        # ValueError against a non-leap candidate year before the other year is tried.
+        self.date: date | None = None
+        for year in (self.league.start_date.year, self.league.end_date.year):
+            try:
+                candidate = datetime.strptime(f"{game_date} {year}", "%a %m/%d %Y").date()
+            except ValueError:
+                continue
+            if league_start <= candidate <= league_end:
+                self.date = candidate
+                break
+        if self.date is None:
             raise DateNotInSeason(game_date)
 
         self.time: time | None = None

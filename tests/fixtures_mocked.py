@@ -82,14 +82,15 @@ SCORING_PERIODS = [
 
 # Daily scoring dates. Keys are the "daily period numbers" from getLiveScoringStats'
 # periodList; values are actual calendar dates that fall within the weekly periods above.
-# Days picked >= 10 to dodge the "strip leading zero" logic in League.reset_info (keeps
-# the fixture's period_to_day_list keys trivially matching strftime("%b %d") output).
+# Includes a single-digit day (Nov 9) to exercise League.reset_info's unpadded-day key
+# building (Fantrax renders "Nov 9", not "Nov 09").
 SCORING_DATES = {
     14: "2024-10-14",
     15: "2024-10-15",
     21: "2024-10-21",
     22: "2024-10-22",
     28: "2024-10-28",
+    9: "2024-11-09",
 }
 
 
@@ -168,16 +169,13 @@ def _period_to_day_list_entries() -> list[str]:
     League.reset_info() splits each entry on the first space (giving the period number
     and "(<Weekday> <Mon> <Day>)"), then slices [5:-1] off the remainder to recover
     "<Mon> <Day>" (e.g. "(Wed Oct 21)"[5:-1] == "Oct 21"), which it uses as the lookup
-    key against each scoring date's strftime("%b %d") (with any leading zero stripped).
+    key against each scoring date's "<Mon> <unpadded day>" (e.g. "Nov 9").
     """
     entries = []
     for period_number, iso_date in SCORING_DATES.items():
         d = datetime.strptime(iso_date, "%Y-%m-%d").date()
-        key = d.strftime("%b %d")
-        # Reproduce the same "strip leading zero" used in League.reset_info so the
-        # generated list entry round-trips correctly through that logic.
-        if "0" in key and not key.endswith("0"):
-            key = key.replace("0", "")
+        # Fantrax renders the day with no leading zero ("Oct 21", "Nov 9").
+        key = f"{d.strftime('%b')} {d.day}"
         weekday = d.strftime("%a")
         entries.append(f"{period_number} ({weekday} {key})")
     return entries
@@ -387,10 +385,13 @@ ROTISSERIE_HEADER_CELLS = [
 BYE_TEAM_ID = "bye-placeholder-0000"
 
 
-def _roto_cell(content: str, tool_tip: str | None = None) -> dict:
+def _roto_cell(content: str, tool_tip: str | None = None, gain_color: int | None = None) -> dict:
     cell = {"content": content}
     if tool_tip is not None:
         cell["toolTip"] = tool_tip
+    # Fantrax sets gainColor == 1 on the team that won a category (-1 on the loser).
+    if gain_color is not None:
+        cell["gainColor"] = gain_color
     return cell
 
 
@@ -418,9 +419,13 @@ def build_standings_schedule_rotisserie() -> dict:
     # to exercise the plain-content path, the toolTip-takes-precedence path,
     # the ValueError -> 0.0 fallback for non-numeric content, and the special
     # "Pts" category that drives home_score/away_score.
+    # Header order is [G, A, PIM, Pts]. The first row of a matchupId is the away side,
+    # the second is the home side (see _h2h_rot_2_factory). gainColor == 1 marks the
+    # category winner: away wins G + PIM, home wins A; Pts is a summary column (no winner).
     rotisserie_rows = [
-        _roto_row("9001", t1, [_roto_cell("30"), _roto_cell("25"), _roto_cell("40", tool_tip="40.2"), _roto_cell("2.5")]),
-        _roto_row("9001", t2, [_roto_cell("N/A"), _roto_cell("28"), _roto_cell("33", tool_tip="33.1"), _roto_cell("1.5")]),
+        _roto_row("9001", t1, [_roto_cell("30", gain_color=1), _roto_cell("25", gain_color=-1), _roto_cell("40", tool_tip="40.2", gain_color=1), _roto_cell("2.5")]),
+        _roto_row("9001", t2, [_roto_cell("N/A", gain_color=-1), _roto_cell("28", gain_color=1), _roto_cell("33", tool_tip="33.1", gain_color=-1), _roto_cell("1.5")]),
+        # Second matchup carries no gainColor -> category_winners fall back to None.
         _roto_row("9002", t3, [_roto_cell("18"), _roto_cell("20"), _roto_cell("12"), _roto_cell("3.0")]),
         _roto_row("9002", t4, [_roto_cell("15"), _roto_cell("16"), _roto_cell("22"), _roto_cell("1.0")]),
     ]
@@ -710,28 +715,65 @@ def build_position_counts(scoring_period_number: int | None, team_id: str | None
 # ---------------------------------------------------------------------------
 
 
-def _transaction_row(tx_set_id: str, team_id: str, when: str, transaction_code: str, scorer: dict, claim_type: str | None = None) -> dict:
+def _transaction_row(
+    tx_set_id: str,
+    team_id: str,
+    when: str,
+    transaction_code: str,
+    scorer: dict,
+    claim_type: str | None = None,
+    period: int = 1,
+    executed: bool = True,
+    result: str = "Executed",
+) -> dict:
+    # The third cell is the scoring period the transaction processed in (Fantrax labels
+    # the column "Period"); result/executed report whether the move actually went through.
     row = {
         "txSetId": tx_set_id,
         "transactionCode": transaction_code,
+        "transactionType": transaction_code.title(),
+        "executed": executed,
+        "result": {"content": result},
         "scorer": scorer,
-        "cells": [{"teamId": team_id, "content": TEAM_IDS_TO_NAMES[team_id]}, {"content": when}],
+        "cells": [{"teamId": team_id, "content": TEAM_IDS_TO_NAMES[team_id]}, {"content": when}, {"content": str(period)}],
     }
     if claim_type is not None:
         row["claimType"] = claim_type
     return row
 
 
-def build_transaction_history() -> dict:
+def _all_transaction_rows() -> list[dict]:
     t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
-    rows = [
-        _transaction_row("txset_a", t1, "Mon Oct 14, 2024, 09:30AM", "CLAIM", PLAYER_HEALTHY, claim_type="WW"),
-        _transaction_row("txset_a", t1, "Mon Oct 14, 2024, 09:30AM", "DROP", PLAYER_OUT),
-        _transaction_row("txset_b", t2, "Tue Oct 15, 2024, 11:00AM", "DROP", PLAYER_SUSPENDED),
-        _transaction_row("txset_c", t1, "Wed Oct 16, 2024, 08:15AM", "CLAIM", PLAYER_CENTER, claim_type="FA"),
-        _transaction_row("txset_c", t1, "Wed Oct 16, 2024, 08:15AM", "DROP", PLAYER_INJURED),
+    return [
+        _transaction_row("txset_a", t1, "Mon Oct 14, 2024, 09:30AM", "CLAIM", PLAYER_HEALTHY, claim_type="WW", period=1),
+        _transaction_row("txset_a", t1, "Mon Oct 14, 2024, 09:30AM", "DROP", PLAYER_OUT, period=1),
+        # A waiver claim that did not go through -> executed False / result "Cancelled".
+        _transaction_row("txset_b", t2, "Tue Oct 15, 2024, 11:00AM", "CLAIM", PLAYER_SUSPENDED, claim_type="WW", period=2, executed=False, result="Cancelled"),
+        _transaction_row("txset_c", t1, "Wed Oct 16, 2024, 08:15AM", "CLAIM", PLAYER_CENTER, claim_type="FA", period=2),
+        _transaction_row("txset_c", t1, "Wed Oct 16, 2024, 08:15AM", "DROP", PLAYER_INJURED, period=2),
     ]
-    return {"table": {"rows": rows}}
+
+
+def build_transaction_history(max_results_per_page: int = 100, page_number: int = 1) -> dict:
+    """Page the full row set the way Fantrax's getTransactionDetailsHistory does.
+
+    Honours ``maxResultsPerPage``/``pageNumber`` and reports ``paginatedResultSet``
+    metadata, so the pagination loop in League.transactions() is exercised (and a txSet
+    split across a page boundary is exercised when the page size is small).
+    """
+    rows = _all_transaction_rows()
+    total = len(rows)
+    total_pages = max(1, -(-total // max_results_per_page))  # ceil division
+    start = (page_number - 1) * max_results_per_page
+    return {
+        "table": {"rows": rows[start : start + max_results_per_page]},
+        "paginatedResultSet": {
+            "totalNumPages": total_pages,
+            "pageNumber": page_number,
+            "maxResultsPerPage": max_results_per_page,
+            "totalNumResults": total,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -739,11 +781,24 @@ def build_transaction_history() -> dict:
 # ---------------------------------------------------------------------------
 
 
+# Per-category scoring definitions, keyed by category group id, mirroring the real
+# getLiveScoringStats "scoringCategoriesPerGroup". The "id" (scipId) ties each category
+# to the per-category entries in a scorer's statsMap "object2".
+LIVE_SCORING_CATEGORIES = {
+    "2010": [
+        {"id": "2010#2130#-1", "name": "Goals", "shortName": "G"},
+        {"id": "2010#2090#-1", "name": "Assists", "shortName": "A"},
+        {"id": "2010#2170#-1", "name": "Penalty Minutes", "shortName": "PIM"},
+    ]
+}
+
+
 def build_live_scoring_stats(scoring_date_iso: str) -> dict:
     t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
     matchup_key = f"{t1}_{t2}"
     return {
         "matchups": [matchup_key],
+        "scoringCategoriesPerGroup": LIVE_SCORING_CATEGORIES,
         "scorerMap": {
             "g1": {
                 "g2": {
@@ -756,7 +811,24 @@ def build_live_scoring_stats(scoring_date_iso: str) -> dict:
         },
         "statsPerTeam": {
             "allTeamsStats": {
-                t1: {"ACTIVE": {"statsMap": {"p001": {"object1": 12.5}, "_meta": {"object1": 0}}}},
+                # p001 carries a per-category breakdown (object2) that sums to object1
+                # (12.0 + 4.0 - 3.5 = 12.5); PIM contributes negative fantasy points.
+                t1: {
+                    "ACTIVE": {
+                        "statsMap": {
+                            "p001": {
+                                "object1": 12.5,
+                                "object2": [
+                                    {"scipId": "2010#2130#-1", "sv": "2", "av": 2.0, "fpts": 12.0},
+                                    {"scipId": "2010#2090#-1", "sv": "1", "av": 1.0, "fpts": 4.0},
+                                    {"scipId": "2010#2170#-1", "sv": "7", "av": 7.0, "fpts": -3.5},
+                                ],
+                            },
+                            "_meta": {"object1": 0},
+                        }
+                    }
+                },
+                # p002 has no object2 -> categories stay empty (older/summary responses).
                 t2: {"ACTIVE": {"statsMap": {"p002": {"object1": 7.0}}}},
                 # team3/4 not part of an active matchup on this date -> excluded
                 TEAM_IDS[2]: {"ACTIVE": {"statsMap": {"p003": {"object1": 99.9}}}},
@@ -900,10 +972,11 @@ class MockSession:
     including an explicit ``PLAYOFFS`` request, answers with the regular season view.
     """
 
-    def __init__(self, force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False) -> None:
+    def __init__(self, force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False, tx_page_cap: int | None = None) -> None:
         self.force_error = force_error
         self.rotisserie = rotisserie
         self.no_playoffs = no_playoffs
+        self.tx_page_cap = tx_page_cap
         self.post_calls: list[dict] = []
 
     def post(self, url: str, params: dict | None = None, json: dict | None = None, **kwargs: object) -> FakeResponse:
@@ -959,7 +1032,12 @@ class MockSession:
         if method == "getTradeBlocks":
             return {"tradeBlocks": build_trade_blocks()}
         if method == "getTransactionDetailsHistory":
-            return build_transaction_history()
+            per_page = int(data.get("maxResultsPerPage", 100))
+            # Simulate a server that caps the page size below what the client asked for,
+            # so League.transactions() must page through and stitch txSets across pages.
+            if self.tx_page_cap is not None:
+                per_page = min(per_page, self.tx_page_cap)
+            return build_transaction_history(per_page, int(data.get("pageNumber", 1)))
         raise AssertionError(f"Unhandled method in mock dispatcher: {method} ({data})")
 
     def _dispatch_standings(self, data: dict) -> dict:
@@ -983,5 +1061,5 @@ class MockSession:
         return build_standings_default()
 
 
-def new_mock_session(force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False) -> MockSession:
-    return MockSession(force_error=force_error, rotisserie=rotisserie, no_playoffs=no_playoffs)
+def new_mock_session(force_error: str | None = None, rotisserie: bool = False, no_playoffs: bool = False, tx_page_cap: int | None = None) -> MockSession:
+    return MockSession(force_error=force_error, rotisserie=rotisserie, no_playoffs=no_playoffs, tx_page_cap=tx_page_cap)

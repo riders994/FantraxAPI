@@ -127,8 +127,8 @@ def get_team_roster_info(league: "League", team_id: str, period_number: int | No
     return responses
 
 
-def get_transaction_history(league: "League", per_page_results: int = 100) -> dict:
-    return request(league, Method("getTransactionDetailsHistory", maxResultsPerPage=str(per_page_results)))
+def get_transaction_history(league: "League", max_results_per_page: int = 100, page_number: int = 1) -> dict:
+    return request(league, Method("getTransactionDetailsHistory", maxResultsPerPage=str(max_results_per_page), pageNumber=str(page_number)))
 
 
 def get_live_scoring_stats(league: "League", scoring_date: date | None = None) -> dict:
