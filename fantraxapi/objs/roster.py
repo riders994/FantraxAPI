@@ -34,6 +34,8 @@ class Roster(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", team_id: str, data: dict) -> None:
         super().__init__(league, data[0])
         self.team: Team = self.league.team(team_id)
@@ -113,6 +115,8 @@ class RosterRow(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, roster: Roster, data: dict) -> None:
         super().__init__(roster.league, data)
         self.roster: Roster = roster
@@ -123,8 +127,10 @@ class RosterRow(FantraxBaseObject):
         self.salary: float | None = self._data["salary"]
         self.contract_year: str | None = self._data["contract_year"]
         self.age: int | None = self._data["age"]
-        self.game_today: Game | None = Game(self.league, self.player, roster.period_date.strftime("%a %m/%d"), self._data["game_today"]) if "game_today" in self._data else None
-        self.future_games: dict[str, Game] = {k: Game(self.league, self.player, k, v) for k, v in self._data["future_games"].items()}
+        # A roster row only carries games when it has a player (see Roster.__init__: the
+        # game cells are collected inside the "scorer" block), so player is set here.
+        self.game_today: Game | None = Game(self.league, self.player, roster.period_date.strftime("%a %m/%d"), self._data["game_today"]) if "game_today" in self._data and self.player is not None else None
+        self.future_games: dict[str, Game] = {k: Game(self.league, self.player, k, v) for k, v in self._data["future_games"].items()} if self.player is not None else {}
 
     def __str__(self) -> str:
         return f"{self.position.short_name}: {self.player if self.player else 'Empty'}"

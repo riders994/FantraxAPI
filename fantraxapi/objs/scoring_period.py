@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 from ..exceptions import NotTeamInLeague
 from ._parse import parse_date_range, parse_decimal, parse_float, period_number
@@ -25,6 +26,8 @@ class ScoringPeriod(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         self.start: date
@@ -36,7 +39,7 @@ class ScoringPeriod(FantraxBaseObject):
     def range(self) -> str:
         return f"{self.start.strftime('%Y-%m-%d')} - {self.end.strftime('%Y-%m-%d')}"
 
-    def __eq__(self, other: str | int | Self) -> bool:
+    def __eq__(self, other: object) -> bool:
         if isinstance(other, ScoringPeriod):
             return self.league.league_id == other.league.league_id and self.number == other.number
         elif isinstance(other, int):
@@ -76,11 +79,13 @@ class ScoringPeriodResult(FantraxBaseObject):
 
     """
 
-    def __init__(self, league: "League", data: dict, other_data: list[tuple[str, dict]] = None, playoffs: bool | None = None) -> None:
+    _data: dict
+
+    def __init__(self, league: "League", data: dict, other_data: list[tuple[str | None, dict]] | None = None, playoffs: bool | None = None) -> None:
         super().__init__(league, data)
         self.name: str = self._data["caption"]
 
-        self.matchup_types = {
+        self.matchup_types: dict[str, Callable[[dict], dict[str, Matchup]]] = {
             'H2hRotisserie2': self._h2h_rot_2_factory,
             'H2hPointsBased3': self._h2h_points_based_3_factory,
         }
@@ -94,10 +99,11 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.end: date
         self.start, self.end = parse_date_range(self._data["subCaption"], "%a %b %d, %Y")
 
+        self.period: ScoringPeriod
         if self.playoffs:
-            self.period: ScoringPeriod = self.league.scoring_periods_lookup[self.range]
+            self.period = self.league.scoring_periods_lookup[self.range]
         else:
-            self.period: ScoringPeriod = self.league.scoring_periods[period_number(self.name)]
+            self.period = self.league.scoring_periods[period_number(self.name)]
 
         self.next: date = self.end + timedelta(days=1)
         self.days: int = (self.next - self.start).days
@@ -109,7 +115,9 @@ class ScoringPeriodResult(FantraxBaseObject):
         self.current: bool = self.start <= now < self.next
         self.future: bool = now < self.start
         self.matchups: dict[str, Matchup] = self._matchup_factory(data)
-        self.other_brackets: dict[str, dict[str, Matchup]] = {}
+        # A bracket whose view has no matching tab carries a None name (see
+        # League._index_playoff_brackets), so the bracket key is optional.
+        self.other_brackets: dict[str | None, dict[str, Matchup]] = {}
         if other_data:
             for name, obj in other_data:
                 self.other_brackets.setdefault(name, {}).update(self._matchup_factory(obj))
@@ -121,18 +129,30 @@ class ScoringPeriodResult(FantraxBaseObject):
             # Unknown table types are treated as the pre-paired points-based shape.
             return {str(i): H2hPointsBased3(self, str(i), matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
 
-    def _h2h_rot_2_factory(self, data: dict) -> dict[str, H2HRotisserie2]:
-        res = dict()
-        matchup_dict = dict()
+    def _h2h_rot_2_factory(self, data: dict) -> dict[str, Matchup]:
+        res: dict[str, Matchup] = dict()
+        pending: dict[str, dict] = dict()
         for row in data["rows"]:
-            muid = row['matchupId']
-            if other_row := matchup_dict.get(muid):
-                res.update({muid: H2HRotisserie2(self, muid, data, row, other_row)})
+            muid = row["matchupId"]
+            first = pending.pop(muid, None)
+            if first is None:
+                pending[muid] = row
+                continue
+            # Fantrax's matchupId is "<away_team_id>_<home_team_id>" (the away side is
+            # listed first, matching H2hPointsBased3's cell order). Anchor the sides to
+            # that layout rather than to which row happened to arrive first, so the result
+            # is stable regardless of row ordering. Fall back to arrival order only if the
+            # ids can't be matched against the matchupId.
+            first_id = first["fixedCells"][0]["teamId"]
+            second_id = row["fixedCells"][0]["teamId"]
+            if muid == f"{second_id}_{first_id}":
+                away_data, home_data = row, first
             else:
-                matchup_dict.update({muid: row})
+                away_data, home_data = first, row
+            res[muid] = H2HRotisserie2(self, muid, data, home_data, away_data)
         return res
 
-    def _h2h_points_based_3_factory(self, data: dict) -> dict[str, H2hPointsBased3]:
+    def _h2h_points_based_3_factory(self, data: dict) -> dict[str, Matchup]:
         return {str(i): H2hPointsBased3(self, str(i), matchup["cells"]) for i, matchup in enumerate(data["rows"], 1)}
 
     def add_matchups(self, data: dict) -> None:
@@ -220,11 +240,16 @@ class H2HRotisserie2(Matchup):
             away_score (float): Away Team Score.
             home (:class:`~Team`): Home Team.
             home_score (float): Home Team Score.
-            scoring_grid (dict[str, dict[str, float]]): Category short name -> {team id -> value}.
-            category_winners (dict[str, str | None]): Category short name -> the id of the team
-                that won that category (``None`` for a tie or a non-category summary column).
+            no_contest (bool): True when one side is an empty bye slot (no real opponent),
+                so the matchup is a non-contest. Its scores stay at the 0.5-0.5 tie default.
+            scoring_grid (dict[str, dict[str, float]]): Scoring category short name -> {team id -> value}.
+                Only real categories are included; the W/L/T/Pts summary columns are excluded.
+            category_winners (dict[str, str | None]): Scoring category short name -> the id of the
+                team that won that category, or ``None`` when the category was tied.
 
     """
+    # Default to a 0.5-0.5 tie; the real result overwrites these from the "Pts" (Category
+    # points) column. A no-contest/bye matchup keeps the tie default (see no_contest).
     home_score = 0.5
     away_score = 0.5
 
@@ -234,30 +259,38 @@ class H2HRotisserie2(Matchup):
         self.matchup_key: str = matchup_key
         self.scoring_grid: dict[str, dict[str, float]] = dict()
         self.category_winners: dict[str, str | None] = dict()
+        self.no_contest: bool = False
         bye_data = {"name": "Bye", "shortName": "BYE", "logoUrl128": ""}
+        # This shape always resolves both sides to a Team (a missing side becomes a Bye
+        # Team), unlike the base Matchup which also allows a raw str name. A bye side means
+        # there's no real opponent, so the matchup is a non-contest.
+        self.away: Team
+        self.home: Team
         try:
             self.away = self.league.team(away_data['fixedCells'][0]["teamId"])
         except NotTeamInLeague:
             self.away = Team(self.league, "bye", bye_data)
+            self.no_contest = True
         try:
             self.home = self.league.team(home_data['fixedCells'][0]["teamId"])
         except NotTeamInLeague:
             self.home = Team(self.league, "bye", bye_data)
+            self.no_contest = True
 
-        self.home_categories = {'opponent': self.away.id}
-        self.away_categories = {'opponent': self.home.id}
+        self.home_categories: dict[str, str | float] = {'opponent': self.away.id}
+        self.away_categories: dict[str, str | float] = {'opponent': self.home.id}
 
         headers =  self._header_translator(data["header"]['cells'])
         self._scoreboard_builder(home_data['cells'], away_data['cells'], headers)
 
     @staticmethod
-    def _header_translator(headers: list[dict]) -> dict[str, str]:
-        return {
-            h['shortName']: h['name'] for h in headers
-        }
+    def _header_translator(headers: list[dict]) -> list[tuple[str, str | None]]:
+        # Preserve column order and carry each column's key so the scoreboard builder can
+        # tell real scoring categories (key "scip") from summary columns (win/loss/tie/cp).
+        return [(h["shortName"], h.get("key")) for h in headers]
 
-    def _scoreboard_builder(self, home_cells: list[dict], away_cells: list[dict], headers: dict[str, str]) -> None:
-        for i, category in enumerate(headers):
+    def _scoreboard_builder(self, home_cells: list[dict], away_cells: list[dict], headers: list[tuple[str, str | None]]) -> None:
+        for i, (short_name, key) in enumerate(headers):
             if home_cells[i].get('toolTip'):
                 h = parse_float(home_cells[i].get('toolTip'))
                 a = parse_float(away_cells[i].get('toolTip'))
@@ -265,29 +298,34 @@ class H2HRotisserie2(Matchup):
                 h = parse_float(home_cells[i]['content'])
                 a = parse_float(away_cells[i]['content'])
 
-            self.scoring_grid.update({
-                category: {
-                    self.home.id: h,
-                    self.away.id: a,
-                }
-            })
-            self.home_categories.update({
-                category: h
-            })
-            self.away_categories.update({
-                category: a
-            })
-            # Fantrax flags the winning side of each category with gainColor == 1; capture
-            # that win/loss outcome rather than discarding it (None = tie / summary column).
-            if home_cells[i].get('gainColor') == 1:
-                self.category_winners[category] = self.home.id
-            elif away_cells[i].get('gainColor') == 1:
-                self.category_winners[category] = self.away.id
-            else:
-                self.category_winners[category] = None
-            if category == 'Pts':
+            # "cp" (Category points) is the matchup total that decides the winner. A
+            # bye/non-contest has no real result, so leave the scores at the tie default.
+            if key == "cp" and not self.no_contest:
                 self.home_score = h
                 self.away_score = a
+
+            # Only "scip" columns are real scoring categories; W/L/T/Pts (win/loss/tie/cp)
+            # are per-matchup summaries and must not be treated as categories.
+            if key != "scip":
+                continue
+
+            self.scoring_grid[short_name] = {self.home.id: h, self.away.id: a}
+            self.home_categories[short_name] = h
+            self.away_categories[short_name] = a
+            # Fantrax flags the category winner with gainColor == 1 and the loser with -1;
+            # a tie is 0 on both sides. Since only real categories reach here, a None winner
+            # now unambiguously means the category was tied (or has no result yet).
+            if home_cells[i].get('gainColor') == 1:
+                self.category_winners[short_name] = self.home.id
+            elif away_cells[i].get('gainColor') == 1:
+                self.category_winners[short_name] = self.away.id
+            else:
+                self.category_winners[short_name] = None
+
+    def __str__(self) -> str:
+        if self.no_contest:
+            return f"{self.scoring_period.title} {self.away} vs {self.home} (No Contest)"
+        return super().__str__()
 
 
 class H2hPointsBased3(Matchup):
@@ -324,12 +362,14 @@ class H2hPointsBased3(Matchup):
             self.home = self._data[2]["content"]
         self._home_score: Decimal = parse_decimal(self._data[3]["content"])
 
+    # This shape derives its scores from exact Decimals, so they are read-only here even
+    # though the base Matchup (and the sibling H2HRotisserie2) treat them as writable.
     @property
-    def away_score(self) -> float:
+    def away_score(self) -> float:  # type: ignore[override]
         return float(self._away_score)
 
     @property
-    def home_score(self) -> float:
+    def home_score(self) -> float:  # type: ignore[override]
         return float(self._home_score)
 
     def difference(self) -> float:

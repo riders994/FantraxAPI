@@ -30,6 +30,8 @@ class Player(FantraxBaseObject):
         injured (bool): Player either Day-to-Day, Out, or on Injured Reserve.
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         self.id: str = self._data["scorerId"]

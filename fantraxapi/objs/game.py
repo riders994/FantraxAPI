@@ -1,5 +1,5 @@
 from datetime import date, datetime, time
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING
 
 from ..exceptions import DateNotInSeason
 from .base import FantraxBaseObject
@@ -26,6 +26,8 @@ class Game(FantraxBaseObject):
         away (bool): Is Player Away?
 
     """
+
+    _data: dict
 
     def __init__(self, league: "League", player: Player, game_date: str, data: dict) -> None:
         super().__init__(league, data)
@@ -79,7 +81,9 @@ class Game(FantraxBaseObject):
         self.home: bool = home == self.player.team_short_name
         self.away: bool = home != self.player.team_short_name
 
-    def __eq__(self, other: Self) -> bool:
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Game):
+            return NotImplemented
         return self.id == other.id
 
     def __hash__(self) -> int:

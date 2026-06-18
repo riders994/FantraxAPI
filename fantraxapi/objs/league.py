@@ -1,5 +1,4 @@
 from datetime import date, datetime
-from typing import ParamSpec
 
 from requests import Session
 
@@ -22,8 +21,6 @@ from .team import Team
 from .trade import Trade
 from .trade_block import TradeBlock
 from .transaction import Transaction
-
-Param = ParamSpec("Param")
 
 
 def _index_playoff_brackets(bracket_responses: list[dict]) -> dict[int, list[tuple[str | None, dict]]]:
@@ -121,8 +118,10 @@ class League:
         self.session: Session = Session() if session is None else session
         self.name: str = ""
         self.year: str = ""
-        self.start_date: datetime | None = None
-        self.end_date: datetime | None = None
+        # start_date/end_date are populated by reset_info() below (always called from
+        # __init__), so they are non-optional datetimes for the object's whole lifetime.
+        self.start_date: datetime
+        self.end_date: datetime
         self.positions: dict[str, Position] = {}
         self.status: dict[str, Status] = {}
         self.scoring_periods: dict[int, ScoringPeriod] = {}
@@ -245,9 +244,9 @@ class League:
             Standings: Standings object that corresponds with the period standing.
 
         """
-        kwargs = {}
+        kwargs: dict[str, str] = {}
         if scoring_period_number is not None:
-            kwargs["period"] = scoring_period_number
+            kwargs["period"] = str(scoring_period_number)
             kwargs["timeframeType"] = "BY_PERIOD"
             kwargs["timeStartType"] = "PERIOD_ONLY" if only_period else "FROM_SEASON_START"
         response = api.get_standings(self, **kwargs)

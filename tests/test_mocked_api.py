@@ -15,6 +15,7 @@ from datetime import date, datetime
 
 from fixtures_mocked import (
     _FUTURE_GAME_LABEL,
+    BYE_TEAM_ID,
     LEAGUE_ID,
     LEAGUE_NAME,
     LEAGUE_YEAR,
@@ -242,13 +243,15 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         cls.league = League(LEAGUE_ID, session=new_mock_session(rotisserie=True))
 
     def test_h2h_rotisserie_matchup_fields(self) -> None:
+        t1, t2, t3, t4 = TEAM_IDS
         results = self.league.scoring_period_results(playoffs=False)
         self.assertEqual(results[1].matchup_type, "H2hRotisserie2")
         # Unlike H2hPointsBased3 (keyed by 1-based row position), _h2h_rot_2_factory
-        # keys matchups by their matchupId straight from the row data.
-        self.assertEqual(set(results[1].matchups), {"9001", "9002"})
-        matchup = results[1].matchups["9001"]
+        # keys matchups by their matchupId ("<away_id>_<home_id>") straight from the data.
+        self.assertEqual(set(results[1].matchups), {f"{t1}_{t2}", f"{t3}_{t4}"})
+        matchup = results[1].matchups[f"{t1}_{t2}"]
         self.assertIsInstance(matchup, H2HRotisserie2)
+        self.assertFalse(matchup.no_contest)
         self.assertEqual(matchup.away.name, "Anchorage Avalanche")
         self.assertEqual(matchup.home.name, "Bayview Bandits")
         self.assertEqual(matchup.away_score, 2.5)
@@ -261,23 +264,35 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(matchup.scoring_grid["G"], {matchup.home.id: 0.0, matchup.away.id: 30.0})
         self.assertEqual(matchup.home_categories["G"], 0.0)
         self.assertEqual(matchup.away_categories["G"], 30.0)
-        # The "Pts" category is what drives home_score/away_score
-        self.assertEqual(matchup.scoring_grid["Pts"], {matchup.home.id: 1.5, matchup.away.id: 2.5})
+        # The "Pts" (Category points) column drives home_score/away_score but is a summary,
+        # not a scoring category -- so it (and W/L/T) is excluded from the grid/categories.
+        self.assertEqual(matchup.away_score, 2.5)
+        self.assertEqual(matchup.home_score, 1.5)
+        self.assertEqual(set(matchup.scoring_grid), {"G", "A", "PIM", "BLK"})
+        for summary in ("W", "L", "T", "Pts"):
+            self.assertNotIn(summary, matchup.scoring_grid)
+            self.assertNotIn(summary, matchup.category_winners)
+            self.assertNotIn(summary, matchup.home_categories)
         self.assertEqual(matchup.composite_key, f"{matchup.home.id}_{matchup.away.id}")
         # Per-category win/loss (gainColor) is captured, not discarded.
         self.assertEqual(matchup.category_winners["G"], matchup.away.id)
         self.assertEqual(matchup.category_winners["A"], matchup.home.id)
         self.assertEqual(matchup.category_winners["PIM"], matchup.away.id)
-        self.assertIsNone(matchup.category_winners["Pts"])
+        # A tied category (gainColor 0 on both sides) is recorded as None -- now unambiguous
+        # since summary columns no longer share that sentinel.
+        self.assertIsNone(matchup.category_winners["BLK"])
         # winner()/difference() (shared on the base) work off the public scores, so
         # they apply to rotisserie too -- difference() no longer needs Decimal internals.
         self.assertEqual(matchup.winner()[0].name, "Anchorage Avalanche")
         self.assertEqual(matchup.difference(), 1.0)
 
     def test_h2h_rotisserie_second_matchup(self) -> None:
+        t1, t2, t3, t4 = TEAM_IDS
         results = self.league.scoring_period_results(playoffs=False)
-        matchup = results[1].matchups["9002"]
+        matchup = results[1].matchups[f"{t3}_{t4}"]
         self.assertIsInstance(matchup, H2HRotisserie2)
+        # This matchup's rows are supplied in reverse matchupId order (home row first),
+        # so passing here proves away/home follow the matchupId, not arrival order.
         self.assertEqual(matchup.away.name, "Cedar Crushers")
         self.assertEqual(matchup.home.name, "Dockside Dragons")
         self.assertEqual(matchup.away_score, 3.0)
@@ -297,17 +312,23 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         self.assertEqual(matchup.away_score, 110.5)
 
     def test_other_brackets_with_rotisserie_data(self) -> None:
+        t3 = TEAM_IDS[2]
         results = self.league.scoring_period_results(season=False, playoffs=True)
         playoff_result = results[5]
         self.assertIn("Consolation", playoff_result.other_brackets)
         bracket = playoff_result.other_brackets["Consolation"]
-        self.assertEqual(set(bracket), {"9201"})
-        consolation_matchup = bracket["9201"]
+        self.assertEqual(set(bracket), {f"{t3}_{BYE_TEAM_ID}"})
+        consolation_matchup = bracket[f"{t3}_{BYE_TEAM_ID}"]
         self.assertIsInstance(consolation_matchup, H2HRotisserie2)
         self.assertEqual(consolation_matchup.away.name, "Cedar Crushers")
         # The bracket's other slot is an unrecognized teamId -> bye placeholder Team
         self.assertEqual(consolation_matchup.home.name, "Bye")
         self.assertEqual(consolation_matchup.home.short, "BYE")
+        # A bye slot makes this a non-contest: it's flagged and recorded as a 0.5-0.5 tie
+        # (the placeholder's "Pts" cell is ignored), and renders as such.
+        self.assertTrue(consolation_matchup.no_contest)
+        self.assertEqual(consolation_matchup.away_score, consolation_matchup.home_score)
+        self.assertEqual(str(consolation_matchup), "Playoff Period 5 Cedar Crushers vs Bye (No Contest)")
         # composite_key works against the placeholder Team just like a real one
         self.assertEqual(consolation_matchup.composite_key, f"bye_{consolation_matchup.away.id}")
 
@@ -316,7 +337,7 @@ class RotisserieScoringPeriodResultsTests(unittest.TestCase):
         # isn't a league member; owners must come back empty without issuing the
         # roster request (live, that request errors out).
         results = self.league.scoring_period_results(season=False, playoffs=True)
-        bye_team = results[5].other_brackets["Consolation"]["9201"].home
+        bye_team = results[5].other_brackets["Consolation"][f"{TEAM_IDS[2]}_{BYE_TEAM_ID}"].home
         self.assertEqual(bye_team.name, "Bye")
         calls = len(self.league.session.post_calls)
         self.assertEqual(bye_team.owners, "")

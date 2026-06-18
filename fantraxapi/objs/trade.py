@@ -25,6 +25,8 @@ class Trade(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", data: dict) -> None:
         super().__init__(league, data)
         info = {i["name"]: i["value"] for i in self._data["usefulInfo"]}
@@ -61,6 +63,8 @@ class Trade(FantraxBaseObject):
 
 
 class TradeItem(FantraxBaseObject, ABC):
+    _data: dict
+
     def __init__(self, trade: "Trade", data: dict) -> None:
         super().__init__(trade.league, data)
         self.trade: Trade = trade

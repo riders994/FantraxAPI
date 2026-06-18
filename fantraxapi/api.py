@@ -1,28 +1,27 @@
 from datetime import date
 from json.decoder import JSONDecodeError
-from typing import TYPE_CHECKING, ParamSpec
+from typing import TYPE_CHECKING, cast
 
 from requests import Session
 
-from fantraxapi.exceptions import FantraxException, NotLoggedIn, NotMemberOfLeague
+from .exceptions import FantraxException, NotLoggedIn, NotMemberOfLeague
 
 if TYPE_CHECKING:
-    from fantraxapi.objs import League
+    from .objs import League
 
 
-Param: ParamSpec = ParamSpec("Param")
 default_session: Session = Session()
 
 debug: bool = False
 
 
 class Method:
-    def __init__(self, name: str, **kwargs: Param.kwargs) -> None:
+    def __init__(self, name: str, **kwargs: object) -> None:
         self.name: str = name
         self.kwargs: dict = kwargs
         self.response: dict | None = None
 
-    def msg_block(self, league_id: str) -> dict[str, str]:
+    def msg_block(self, league_id: str) -> dict[str, str | dict[str, str]]:
         output_data = {"leagueId": league_id}
         for key, value in self.kwargs.items():
             if value is not None:
@@ -34,7 +33,9 @@ class Method:
 
 
 def request(league: "League", methods: list[Method] | Method) -> dict:
-    return _request(league.league_id, methods, session=league.session)
+    # _request returns a list only for multi-Method calls; the few callers that pass a
+    # list index the result positionally, so the single-Method dict shape is the contract.
+    return _request(league.league_id, methods, session=league.session)  # type: ignore[return-value]
 
 
 def _request(league_id: str, methods: list[Method] | Method, session: Session | None = None) -> list[dict] | dict:
@@ -90,14 +91,13 @@ def get_pending_transactions(league: "League") -> dict:
     return request(league, Method("getPendingTransactions"))
 
 
-def get_standings(league: "League", views: list[str] | str | None = None, **kwargs: Param.kwargs) -> dict:
+def get_standings(league: "League", views: list[str] | str | None = None, **kwargs: object) -> dict:
     if "view" in kwargs and views is None:
-        views = kwargs.pop("view")
+        views = cast("list[str] | str", kwargs.pop("view"))
     if "view" in kwargs:
         del kwargs["view"]
-    if not isinstance(views, list):
-        views = [views]
-    response = request(league, [Method("getStandings", view=v, **kwargs) for v in views])
+    view_list: list[str | None] = [v for v in views] if isinstance(views, list) else [views]
+    response = request(league, [Method("getStandings", view=v, **kwargs) for v in view_list])
     responses = response if isinstance(response, list) else [response]
     for res in responses:
         if "fantasyTeamInfo" in res:

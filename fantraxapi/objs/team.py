@@ -2,7 +2,7 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from .base import FantraxBaseObject
-from .player import Player
+from .player import LivePlayer
 from .position import PositionCount
 from .roster import Roster
 
@@ -30,6 +30,8 @@ class Team(FantraxBaseObject):
 
     """
 
+    _data: dict
+
     def __init__(self, league: "League", team_id: str, data: dict) -> None:
         super().__init__(league, data)
         self.id: str = team_id
@@ -42,9 +44,9 @@ class Team(FantraxBaseObject):
         if "logoUrl512" in self._data:
             self.logo: str = self._data["logoUrl512"]
         elif "logoUrl256" in self._data:
-            self.logo: str = self._data["logoUrl256"]
+            self.logo = self._data["logoUrl256"]
         else:
-            self.logo: str = self._data["logoUrl128"]
+            self.logo = self._data["logoUrl128"]
 
     @property
     def owners(self) -> str:
@@ -100,14 +102,14 @@ class Team(FantraxBaseObject):
         """
         return self.league.position_counts(self.id, scoring_period_number=scoring_period_number)
 
-    def live_scores(self, score_date: date) -> list["Player"]:
-        """Returns a list of Player objects with scores for that day.
+    def live_scores(self, score_date: date) -> list["LivePlayer"]:
+        """Returns a list of LivePlayer objects with scores for that day.
 
         Args:
             score_date (date): Date of the Live Scoring.
 
         Returns:
-            list[Player]: List of Player objects with scores for that day.
+            list[LivePlayer]: List of LivePlayer objects with scores for that day.
 
         """
         return self.league.live_scores(score_date)[self.id]

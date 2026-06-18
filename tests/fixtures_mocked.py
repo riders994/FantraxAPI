@@ -370,13 +370,20 @@ MATCHUP_TABLE_TYPE_ROTISSERIE = "H2hRotisserie2"
 # used to exercise _matchup_factory's generic-Matchup fallback branch.
 MATCHUP_TABLE_TYPE_UNKNOWN = "H2hSomeFutureType"
 
-# shortName/name pairs mirror the "header.cells" shape H2HRotisserie2 reads
-# (only the shortName ends up mattering -- see _header_translator/_scoreboard_builder).
+# Mirrors a real rotisserie header: per-matchup summary columns (Category Wins/Losses/Ties
+# and "Category points") carry non-"scip" keys and must be excluded from the scoring grid;
+# only the key=="scip" stat columns are real categories. "Pts" (key "cp") drives the matchup
+# score -- note it differs from a category literally named "PTS" only by its key, which is
+# why H2HRotisserie2 keys off "key" rather than the shortName.
 ROTISSERIE_HEADER_CELLS = [
-    {"shortName": "G", "name": "Goals"},
-    {"shortName": "A", "name": "Assists"},
-    {"shortName": "PIM", "name": "Penalty Minutes"},
-    {"shortName": "Pts", "name": "Points"},
+    {"key": "win", "shortName": "W", "name": "Category Wins"},
+    {"key": "loss", "shortName": "L", "name": "Category Losses"},
+    {"key": "tie", "shortName": "T", "name": "Category Ties"},
+    {"key": "cp", "shortName": "Pts", "name": "Category points"},
+    {"key": "scip", "shortName": "G", "name": "Goals"},
+    {"key": "scip", "shortName": "A", "name": "Assists"},
+    {"key": "scip", "shortName": "PIM", "name": "Penalty Minutes"},
+    {"key": "scip", "shortName": "BLK", "name": "Blocks"},
 ]
 
 # Fantrax sends a teamId like this for an empty bracket slot -- not a real
@@ -413,21 +420,31 @@ def _roto_table_entry(caption: str, sub_caption: str, rows: list[dict]) -> dict:
 def build_standings_schedule_rotisserie() -> dict:
     t1, t2, t3, t4 = TEAM_IDS
 
-    # Period 1: two H2hRotisserie2 matchups paired by matchupId. The first row
-    # seen for a matchupId becomes the away side, the second becomes the home
-    # side (see ScoringPeriodResult._h2h_rot_2_factory). Cell values are picked
-    # to exercise the plain-content path, the toolTip-takes-precedence path,
-    # the ValueError -> 0.0 fallback for non-numeric content, and the special
-    # "Pts" category that drives home_score/away_score.
-    # Header order is [G, A, PIM, Pts]. The first row of a matchupId is the away side,
-    # the second is the home side (see _h2h_rot_2_factory). gainColor == 1 marks the
-    # category winner: away wins G + PIM, home wins A; Pts is a summary column (no winner).
+    # Period 1: two H2hRotisserie2 matchups. Fantrax's matchupId is
+    # "<away_team_id>_<home_team_id>"; that string (not row arrival order) anchors the
+    # away/home sides -- see ScoringPeriodResult._h2h_rot_2_factory. Cell values exercise
+    # the plain-content path, the toolTip-takes-precedence path, the ValueError -> 0.0
+    # fallback for non-numeric content, and the "Pts" category that drives the scores.
+    # Header order is [G, A, PIM, Pts]. gainColor == 1 marks the category winner: in
+    # matchup one, away (t1) wins G + PIM, home (t2) wins A; Pts is a summary column (no
+    # winner). Matchup two lists its rows in reverse of the matchupId (home row first) to
+    # prove the sides follow the matchupId rather than arrival order.
+    m1, m2 = f"{t1}_{t2}", f"{t3}_{t4}"
+    # Column order matches ROTISSERIE_HEADER_CELLS: [W, L, T, Pts] summaries then the
+    # [G, A, PIM, BLK] scoring categories. In matchup one, away (t1) wins G + PIM, home (t2)
+    # wins A, and BLK is tied (gainColor 0 on both -> a None category winner). The W/L/T/Pts
+    # summary columns must be excluded from the scoring grid; Pts (key "cp") drives the score.
     rotisserie_rows = [
-        _roto_row("9001", t1, [_roto_cell("30", gain_color=1), _roto_cell("25", gain_color=-1), _roto_cell("40", tool_tip="40.2", gain_color=1), _roto_cell("2.5")]),
-        _roto_row("9001", t2, [_roto_cell("N/A", gain_color=-1), _roto_cell("28", gain_color=1), _roto_cell("33", tool_tip="33.1", gain_color=-1), _roto_cell("1.5")]),
-        # Second matchup carries no gainColor -> category_winners fall back to None.
-        _roto_row("9002", t3, [_roto_cell("18"), _roto_cell("20"), _roto_cell("12"), _roto_cell("3.0")]),
-        _roto_row("9002", t4, [_roto_cell("15"), _roto_cell("16"), _roto_cell("22"), _roto_cell("1.0")]),
+        _roto_row(m1, t1, [_roto_cell("2"), _roto_cell("1"), _roto_cell("1"), _roto_cell("2.5"),
+                           _roto_cell("30", gain_color=1), _roto_cell("25", gain_color=-1), _roto_cell("40", tool_tip="40.2", gain_color=1), _roto_cell("12", gain_color=0)]),
+        _roto_row(m1, t2, [_roto_cell("1"), _roto_cell("2"), _roto_cell("1"), _roto_cell("1.5"),
+                           _roto_cell("N/A", gain_color=-1), _roto_cell("28", gain_color=1), _roto_cell("33", tool_tip="33.1", gain_color=-1), _roto_cell("12", gain_color=0)]),
+        # Second matchup carries no gainColor -> every category winner is None. Its rows are
+        # supplied in reverse matchupId order (home t4 first, away t3 second).
+        _roto_row(m2, t4, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("1.0"),
+                           _roto_cell("15"), _roto_cell("16"), _roto_cell("22"), _roto_cell("10")]),
+        _roto_row(m2, t3, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("3.0"),
+                           _roto_cell("18"), _roto_cell("20"), _roto_cell("12"), _roto_cell("8")]),
     ]
 
     return {
@@ -450,9 +467,13 @@ def build_standings_schedule_rotisserie() -> dict:
 
 def build_standings_playoffs_rotisserie() -> dict:
     t1, t2 = TEAM_IDS[0], TEAM_IDS[1]
+    m = f"{t1}_{t2}"
+    # Cells follow ROTISSERIE_HEADER_CELLS: [W, L, T, Pts] then [G, A, PIM, BLK].
     rows = [
-        _roto_row("9101", t1, [_roto_cell("32"), _roto_cell("27"), _roto_cell("38"), _roto_cell("3.0")]),
-        _roto_row("9101", t2, [_roto_cell("29"), _roto_cell("24"), _roto_cell("44"), _roto_cell("1.0")]),
+        _roto_row(m, t1, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("3.0"),
+                          _roto_cell("32"), _roto_cell("27"), _roto_cell("38"), _roto_cell("5")]),
+        _roto_row(m, t2, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("1.0"),
+                          _roto_cell("29"), _roto_cell("24"), _roto_cell("44"), _roto_cell("5")]),
     ]
     return {
         "displayedSelections": {"view": "PLAYOFFS"},
@@ -470,10 +491,15 @@ def build_standings_playoffs_rotisserie() -> dict:
 
 def build_standings_consolation_rotisserie() -> dict:
     t3 = TEAM_IDS[2]
-    # Odd team count in this bracket -> Cedar Crushers draws a "Bye".
+    # Odd team count in this bracket -> Cedar Crushers draws a "Bye". matchupId pairs the
+    # real team (away) with the bye placeholder id (home).
+    m = f"{t3}_{BYE_TEAM_ID}"
+    # Cells follow ROTISSERIE_HEADER_CELLS: [W, L, T, Pts] then [G, A, PIM, BLK].
     rows = [
-        _roto_row("9201", t3, [_roto_cell("20"), _roto_cell("19"), _roto_cell("16"), _roto_cell("2.0")]),
-        _roto_row("9201", BYE_TEAM_ID, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("0.0")], team_name="Bye"),
+        _roto_row(m, t3, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("2.0"),
+                          _roto_cell("20"), _roto_cell("19"), _roto_cell("16"), _roto_cell("4")]),
+        _roto_row(m, BYE_TEAM_ID, [_roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("0.0"),
+                                   _roto_cell("0"), _roto_cell("0"), _roto_cell("0"), _roto_cell("0")], team_name="Bye"),
     ]
     return {
         "displayedSelections": {"view": ".consolation"},
